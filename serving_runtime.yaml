@@ -16,8 +16,8 @@ spec:
         - --task
         - sentiment-analysis
         - --model_path
-        - /mnt/models/mobilenetv2-7.onnx
-      image: quay.io/ltomasbo/neural-magic:v1
+        - /mnt/models/model.onnx
+      image: quay.io/USER/neural-magic:v1
       name: deepsparse
       imagePullPolicy: Always
   multiModel: false
