@@ -28,8 +28,8 @@ DEFAULT_MODEL_PATH = './output'
 
 class NeuralMagicModel(kserve.Model):
     def __init__(self, task: str, model_path: str):
-        super().__init__()
         self.name = "neural-magic-model"
+        super().__init__(self.name)
         self.task = task
         self.model_path = model_path
         self.load()
@@ -63,5 +63,5 @@ if __name__ == "__main__":
                              'containing the model.onnx')
     args, _ = parser.parse_known_args()
 
-    model = NeuralMagicModel(model_task=args.task, model_path=args.model_path)
+    model = NeuralMagicModel(task=args.task, model_path=args.model_path)
     kserve.ModelServer().start([model])
