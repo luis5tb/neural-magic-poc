@@ -1,0 +1,4 @@
+deepsparse
+kserve
+logging
+
