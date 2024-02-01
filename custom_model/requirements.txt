@@ -1,4 +1,10 @@
-deepsparse
+deepsparse>=1.6.1
+sparsezoo>=1.6.1
+transformers>=4.36.2
+#deepsparse-nightly
+#sparsezoo-nightly
+
 kserve
-logging
+#logging
+
 

@@ -19,7 +19,7 @@ Use the `serving_runtime.yaml` to deploy it:
 
 `kubectl apply -f serving_runtime.yaml`
 
-## Create object data store (MinIO)
+## Create object data store (MinIO) with the model
 
 Create namespace for the object store
 
@@ -29,10 +29,24 @@ Deploy MinIO:
 
 `oc apply -f minio.yaml`
 
+Download the desired model from sparsezoo
+
+```
+from sparsezoo import Model
+
+stub = "zoo:opt-1.3b-opt_pretrain-pruned50_quantW8A8"
+
+model = Model(stub)
+model.download()
+print(model.path)
+```
+
+Copy the files on the Minio bucket `models`
+
+
 ## Create data connection
 
 ## Deploy the serving runtime
-
 
 ## Deploy the model
 

@@ -1,0 +1,47 @@
+apiVersion: serving.kserve.io/v1alpha1
+kind: ServingRuntime
+metadata:
+  name: deepsparse
+  annotations:
+    openshift.io/display-name: DeepSparse
+  labels:
+    opendatahub.io/dashboard: "true"
+spec:
+  supportedModelFormats:
+    - name: onnx
+      version: "1"
+      autoSelect: true
+  multiModel: true
+  grpcDataEndpoint: port:8001
+  grpcEndpoint: port:8085
+  imagePullPolicy: Always
+  containers:
+    - name: mlserver
+      image: quay.io/ltomasbo/neural-magic:ml
+      env:
+        - name: MLSERVER_MODELS_DIR
+          value: "/models/_mlserver_models/"
+        - name: MLSERVER_GRPC_PORT
+          value: "8001"
+        # The default value for HTTP port is 8080 which conflicts with MMesh's
+        - name: MLSERVER_HTTP_PORT
+          value: "8002"
+        - name: MLSERVER_LOAD_MODELS_AT_STARTUP
+          value: "false"
+        # Set a dummy model name so that MLServer doesn't error on a RepositoryIndex call when no models exist
+        - name: MLSERVER_MODEL_NAME
+          value: dummy-model
+        # Set server address to localhost to ensure MLServer only listens inside the pod
+        - name: MLSERVER_HOST
+          value: "127.0.0.1"
+        # Increase gRPC max message size to support larger payloads
+        # Unlimited (-1) because it will be restricted at the MMesh layer
+        - name: MLSERVER_GRPC_MAX_MESSAGE_LENGTH
+          value: "-1"
+        - name: MLSERVER_DEBUG
+          value: "true"
+  builtInAdapter:
+    serverType: mlserver
+    runtimeManagementPort: 8001
+    memBufferBytes: 134217728
+    modelLoadingTimeoutMillis: 90000

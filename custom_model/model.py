@@ -14,27 +14,36 @@
 
 import argparse
 import logging
+import tarfile
 
 import kserve
 from typing import Dict
 
 from deepsparse import Pipeline
+from sparsezoo import Model
 
 
 KSERVER_LOGGER_NAME = 'kserver'
 DEFAULT_TASK_NAME = 'sentiment-analysis'
-DEFAULT_MODEL_PATH = './output'
+DEFAULT_ZOO_MODEL_NAME = 'zoo:nlp/sentiment_analysis/obert-base/pytorch/huggingface/sst2/pruned90_quant-none'
 
 
 class NeuralMagicModel(kserve.Model):
-    def __init__(self, task: str, model_path: str):
+    def __init__(self, task: str, zoo_model: str):
         self.name = "neural-magic-model"
         super().__init__(self.name)
         self.task = task
-        self.model_path = model_path
+        self.model = zoo_model
         self.load()
 
     def load(self):
+        model = Model(self.model, "/neural_models")
+        model.download()
+        self.model_path = model.path + "/deployment"
+        deployment_file = model.path + "/deployment.tar.gz"
+
+        untar_directory(deployment_file, model.path)
+
         self.pipeline = Pipeline.create(
             task=self.task,
             model_path=self.model_path)
@@ -43,6 +52,11 @@ class NeuralMagicModel(kserve.Model):
         sequence = request["sequence"]
         result = self.pipeline(sequence)
         return {"predictions": result}
+
+
+def untar_directory(tar_path, extract_path):
+    with tarfile.open(tar_path, 'r:gz') as tar:
+        tar.extractall(extract_path)
 
 
 if __name__ == "__main__":
@@ -58,10 +72,8 @@ if __name__ == "__main__":
                              'embedding_extraction|open_pif_paf|'
                              'text_generation|opt|bloom|chatbot|chat|'
                              'code_generation|codegen]')
-    parser.add_argument('--model_path', default=DEFAULT_MODEL_PATH,
-                        help='The path to a model.onnx file, a model folder '
-                             'containing the model.onnx')
+    parser.add_argument('--zoo-model', default=DEFAULT_ZOO_MODEL_NAME)
     args, _ = parser.parse_known_args()
 
-    model = NeuralMagicModel(task=args.task, model_path=args.model_path)
+    model = NeuralMagicModel(task=args.task, zoo_model=args.zoo_model)
     kserve.ModelServer().start([model])
