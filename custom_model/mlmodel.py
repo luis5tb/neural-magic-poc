@@ -1,21 +1,21 @@
+import tarfile
+
 from typing import List
 
 from mlserver import MLModel, types
 from mlserver.errors import InferenceError
-from mlserver.utils import get_model_uri
+#from mlserver.utils import get_model_uri
 
-# files with these names are searched for and assigned to model_uri with an
-# absolute path (instead of using model URI in the model's settings)
-# TODO: set wellknown names to support easier local testing
-WELLKNOWN_MODEL_FILENAMES = ["model.json", "model.dat"]
+from deepsparse import Pipeline
+from sparsezoo import Model
+
 
 class CustomMLModel(MLModel):
     async def load(self) -> bool:
-        # get URI to model data
-        model_uri = await get_model_uri(self._settings, wellknown_filenames=WELLKNOWN_MODEL_FILENAMES)
-
-        # parse/process file and instantiate the model
-        self._load_model_from_file(model_uri)
+        self.name = "neural-magic-model"
+        self.task = 'sentiment-analysis'
+        self.model = 'zoo:nlp/sentiment_analysis/obert-base/pytorch/huggingface/sst2/pruned90_quant-none'
+        self._load_model()
 
         # set ready to signal that model is loaded
         self.ready = True
@@ -26,13 +26,21 @@ class CustomMLModel(MLModel):
 
         return types.InferenceResponse(
             model_name=self.name,
-            model_version=self.version,
             outputs=self._predict_outputs(payload),
         )
 
-    def _load_model_from_file(self, file_uri):
-        # assume that file_uri is an absolute path
+    def _load_model(self):
         # TODO: load model from file and instantiate class data
+        model = Model(self.model, "/models/_mlserver_models")
+        model.download()
+        self.model_path = model.path + "/deployment"
+        deployment_file = model.path + "/deployment.tar.gz"
+
+        untar_directory(deployment_file, model.path)
+
+        self.pipeline = Pipeline.create(
+            task=self.task,
+            model_path=self.model_path)
         return
 
     def _check_request(self, payload: types.InferenceRequest) -> types.InferenceRequest:
@@ -45,9 +53,23 @@ class CustomMLModel(MLModel):
         inputs = payload.inputs
 
         # TODO: transform inputs into internal data structures
+        sequence = inputs["data"]
         # TODO: send data through the model's prediction logic
+        prediction = self.pipeline(sequence)
 
-        outputs = []
         # TODO: construct the outputs
+        outputs = [
+            types.ResponseOutput(
+                name='predictions',
+                shape=prediction.scores,
+                datatype="str",
+                data=prediction.labels
+            )
+        ]
 
         return outputs
+ 
+
+def untar_directory(tar_path, extract_path):
+    with tarfile.open(tar_path, 'r:gz') as tar:
+        tar.extractall(extract_path)
