@@ -1,7 +1,7 @@
 # TODO: choose appropriate base image, install Python, MLServer, and
 # dependencies of your MLModel implementation
 FROM python:3.8-slim-buster
-RUN pip install mlserver
+RUN pip install mlserver deepsparse[transformers] >=1.6.1
 # ...
 
 # The custom `MLModel` implementation should be on the Python search path
@@ -10,8 +10,8 @@ RUN pip install mlserver
 COPY --chown=${USER} ./custom_model/mlmodel.py /opt/custom_model.py
 ENV PYTHONPATH=/opt/
 
-RUN mkdir /.metrics && chgrp -R 0 /.metrics && chmod -R g=u /.metrics
-
+RUN mkdir /.metrics && chgrp -R 0 /.metrics && chmod -R g=u /.metrics && \
+    mkdir /.envs && chgrp -R 0 /.envs && chmod -R g=u /.envs
 
 # environment variables to be compatible with ModelMesh Serving
 # these can also be set in the ServingRuntime, but this is recommended for
@@ -27,4 +27,4 @@ ENV MLSERVER_MODELS_DIR=/models/_mlserver_models \
 # a basic model settings file
 ENV MLSERVER_MODEL_IMPLEMENTATION=custom_model.CustomMLModel
 
-CMD ["mlserver", "start", "${MLSERVER_MODELS_DIR}"]
+CMD ["mlserver", "start", "/models/_mlserver_models"]
