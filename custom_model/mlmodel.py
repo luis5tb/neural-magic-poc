@@ -37,7 +37,7 @@ class CustomMLModel(MLModel):
     def _load_model_from_file(self, file_uri):
         # assume that file_uri is an absolute path
         # TODO: load model from file and instantiate class data
-        self.model = compile_model(file_uri, batch_size=1)
+        self.model = compile_model(file_uri, batch_size=128)
 
     def _check_request(self, payload: types.InferenceRequest) -> types.InferenceRequest:
         # TODO: validate request: number of inputs, input tensor names/types, etc.
