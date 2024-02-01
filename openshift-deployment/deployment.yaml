@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nm-sentiment-deployment
+  labels:
+    app: nm-sentimentinx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nm-sentiment
+  template:
+    metadata:
+      labels:
+        app: nm-sentiment
+    spec:
+      containers:
+      - name: nm-sentiment
+        image: quay.io/ltomasbo/neural-magic:deployment
+        ports:
+        - containerPort: 8080

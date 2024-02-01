@@ -1,0 +1,4 @@
+endpoints:
+    - task: sentiment-analysis
+      route: /predict
+      model: zoo:nlp/sentiment_analysis/distilbert-none/pytorch/huggingface/sst2/pruned80_quant-none-vnni
