@@ -1,0 +1,15 @@
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  annotations:
+    serving.knative.openshift.io/enablePassthrough: "true"
+    sidecar.istio.io/inject: "true"
+    sidecar.istio.io/rewriteAppHTTPProbers: "true"
+  name: neural-magic-poc
+spec:
+  predictor:
+    containers:
+    - name: kserve-container
+      image: quay.io/$USER/neural-magic:deployment
+      ports:
+      - containerPort: 8080
