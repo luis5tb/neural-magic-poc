@@ -29,7 +29,7 @@ class CustomMLModel(MLModel):
         )
 
     def _load_model_from_file(self, file_uri):
-        self.engine = Engine(file_uri, batch_size=128)
+        self.engine = Engine(file_uri)
 
     def _check_request(self, payload: types.InferenceRequest) -> types.InferenceRequest:
         # TODO: validate request: number of inputs, input tensor names/types, etc.

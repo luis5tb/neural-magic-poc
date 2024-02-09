@@ -34,7 +34,7 @@ Download the desired model from sparsezoo
 ```
 from sparsezoo import Model
 
-stub = "zoo:opt-1.3b-opt_pretrain-pruned50_quantW8A8"
+stub = "zoo:nlp/sentiment_analysis/obert-base/pytorch/huggingface/sst2/pruned90_quant-none"
 
 model = Model(stub)
 model.download()

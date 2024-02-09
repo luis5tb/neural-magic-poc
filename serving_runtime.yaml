@@ -1,25 +1,33 @@
 apiVersion: serving.kserve.io/v1alpha1
 kind: ServingRuntime
-labels:
-  opendatahub.io/dashboard: "true"
 metadata:
-  name: deepsparse
   annotations:
     openshift.io/display-name: DeepSparse
+  labels:
+    opendatahub.io/dashboard: "true"
+  name: deepsparse
 spec:
-  supportedModelFormats:
-    - autoSelect: true
-      name: onnx
-      version: "1"
+  builtInAdapter:
+    memBufferBytes: 134217728
+    modelLoadingTimeoutMillis: 90000
+    runtimeManagementPort: 8888
+    serverType: ovms
   containers:
     - args:
         - --task
         - sentiment-analysis
-        - --model_path
-        - /mnt/models/model.onnx
+        - --zoo-model
+        - zoo:nlp/sentiment_analysis/obert-base/pytorch/huggingface/sst2/pruned90_quant-none
       image: quay.io/USER/neural-magic:v1
-      name: deepsparse
+      name: ovms
       imagePullPolicy: Always
-  multiModel: false
-  builtInAdapter:
-    modelLoadingTimeoutMillis: 90000
+  grpcDataEndpoint: port:8001
+  grpcEndpoint: port:8085
+  multiModel: true
+  protocolVersions:
+    - grpc-v1
+    - v2
+  supportedModelFormats:
+    - autoSelect: true
+      name: onnx
+      version: "1"
