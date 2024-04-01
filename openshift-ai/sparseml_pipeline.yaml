@@ -1,0 +1,1105 @@
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  name: llm-pruning-pipeline
+  annotations:
+    tekton.dev/output_artifacts: '{}'
+    tekton.dev/input_artifacts: '{}'
+    tekton.dev/artifact_bucket: mlpipeline
+    tekton.dev/artifact_endpoint: minio-service.kubeflow:9000
+    tekton.dev/artifact_endpoint_scheme: http://
+    tekton.dev/artifact_items: '{"download-model": [], "eval-model": [], "eval-model-2":
+      [], "export-model": [], "export-model-2": [], "export-model-3": [], "sparse-model":
+      [], "upload-pruned-model": [], "upload-pruned-model-2": [], "upload-pruned-model-3":
+      []}'
+    sidecar.istio.io/inject: "false"
+    tekton.dev/template: ''
+    pipelines.kubeflow.org/big_data_passing_format: $(workspaces.$TASK_NAME.path)/artifacts/$ORIG_PR_NAME/$TASKRUN_NAME/$TASK_PARAM_NAME
+    pipelines.kubeflow.org/pipeline_spec: '{"description": "A Pipeline for pruning
+      LLMs with SparseML", "inputs": [{"default": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+      "name": "model_name", "optional": true, "type": "String"}, {"default": "90",
+      "name": "accuracy", "optional": true, "type": "Integer"}, {"default": "True",
+      "name": "sparse", "optional": true, "type": "Boolean"}, {"default": "False",
+      "name": "eval", "optional": true, "type": "Boolean"}, {"default": "hellaswag",
+      "name": "eval_task", "optional": true, "type": "String"}, {"default": "64",
+      "name": "eval_batch_size", "optional": true, "type": "String"}], "name": "LLM
+      Pruning Pipeline"}'
+  labels:
+    pipelines.kubeflow.org/pipelinename: ''
+    pipelines.kubeflow.org/generation: ''
+spec:
+  params:
+  - name: accuracy
+    value: '90'
+  - name: eval
+    value: "False"
+  - name: eval_batch_size
+    value: '64'
+  - name: eval_task
+    value: hellaswag
+  - name: model_name
+    value: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+  - name: sparse
+    value: "True"
+  pipelineSpec:
+    params:
+    - name: accuracy
+      default: '90'
+    - name: eval
+      default: "False"
+    - name: eval_batch_size
+      default: '64'
+    - name: eval_task
+      default: hellaswag
+    - name: model_name
+      default: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+    - name: sparse
+      default: "True"
+    tasks:
+    - name: download-model
+      params:
+      - name: model_name
+        value: $(params.model_name)
+      taskSpec:
+        steps:
+        - name: main
+          args:
+          - --model-name
+          - $(inputs.params.model_name)
+          - --destination-path
+          - /mnt/models/llm
+          command:
+          - sh
+          - -c
+          - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
+            'huggingface-hub' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install
+            --quiet --no-warn-script-location 'huggingface-hub' --user) && "$0" "$@"
+          - sh
+          - -ec
+          - |
+            program_path=$(mktemp)
+            printf "%s" "$0" > "$program_path"
+            python3 -u "$program_path" "$@"
+          - |
+            def download_model(model_name, destination_path):
+                import subprocess
+
+                # Execute the huggingface_hub-cli command
+                result = subprocess.run(["huggingface-cli", "download", model_name,
+                                         "--local-dir", destination_path,
+                                         "--local-dir-use-symlinks", "False"], capture_output=True, text=True)
+
+                # Check for errors or output
+                if result.returncode == 0:
+                    print("Model downloaded successfully.")
+                else:
+                    print("Error downloading model:")
+                    print(result.stderr)
+
+            import argparse
+            _parser = argparse.ArgumentParser(prog='Download model', description='')
+            _parser.add_argument("--model-name", dest="model_name", type=str, required=True, default=argparse.SUPPRESS)
+            _parser.add_argument("--destination-path", dest="destination_path", type=str, required=True, default=argparse.SUPPRESS)
+            _parsed_args = vars(_parser.parse_args())
+
+            _outputs = download_model(**_parsed_args)
+          image: registry.access.redhat.com/ubi9/python-311
+          volumeMounts:
+          - mountPath: /mnt/models
+            name: models-shared
+        params:
+        - name: model_name
+        volumes:
+        - name: models-shared
+          persistentVolumeClaim:
+            claimName: models-shared
+        metadata:
+          labels:
+            pipelines.kubeflow.org/cache_enabled: "true"
+          annotations:
+            pipelines.kubeflow.org/component_spec_digest: '{"name": "Download model",
+              "outputs": [], "version": "Download model@sha256=3a6be80cdd1a11b64952aec033562c09b52aeeb476c1baab2f6ba12800bcd248"}'
+    - name: sparse-model
+      taskSpec:
+        steps:
+        - name: main
+          args:
+          - --model-path
+          - /mnt/models/llm
+          - --compress-model-path
+          - /mnt/models/sparse-llm
+          - --ds
+          - garage-bAInd/Open-Platypus
+          - --precision
+          - bfloat16
+          command:
+          - sh
+          - -c
+          - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
+            'datasets' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet
+            --no-warn-script-location 'datasets' --user) && "$0" "$@"
+          - sh
+          - -ec
+          - |
+            program_path=$(mktemp)
+            printf "%s" "$0" > "$program_path"
+            python3 -u "$program_path" "$@"
+          - "def sparse_model(model_path, compress_model_path, ds, precision):\n \
+            \   from sparseml.transformers import (\n        SparseAutoModelForCausalLM,\
+            \ SparseAutoTokenizer, load_dataset, oneshot\n    )\n\n    model = SparseAutoModelForCausalLM.from_pretrained(model_path,\
+            \ device_map=\"auto\")\n\n    tokenizer = SparseAutoTokenizer.from_pretrained(model_path)\n\
+            \    #tokenizer = SparseAutoTokenizer.from_pretrained(model_path).to(model.device)\n\
+            \n    dataset = load_dataset(ds)\n\n    def format_data(data):\n     \
+            \   return {\n            \"text\": data[\"instruction\"] + data[\"output\"\
+            ]\n        }\n\n    dataset = dataset.map(format_data)\n\n    recipe =\
+            \ \"\"\"\n    test_stage:\n      obcq_modifiers:\n        LogarithmicEqualizationModifier:\n\
+            \          mappings: [\n            [[\"re:.*q_proj\", \"re:.*k_proj\"\
+            , \"re:.*v_proj\"], \"re:.*input_layernorm\"],\n            [[\"re:.*gate_proj\"\
+            , \"re:.*up_proj\"], \"re:.*post_attention_layernorm\"],\n          ]\
+            \ \n        QuantizationModifier:\n          ignore:\n            # These\
+            \ operations don't make sense to quantize\n            - LlamaRotaryEmbedding\n\
+            \            - LlamaRMSNorm\n            - SiLUActivation\n          \
+            \  - MatMulOutput_QK\n            - MatMulOutput_PV\n            # Skip\
+            \ quantizing the layers with the most sensitive activations\n        \
+            \    - model.layers.21.mlp.down_proj\n            - model.layers.7.mlp.down_proj\n\
+            \            - model.layers.2.mlp.down_proj\n            - model.layers.8.self_attn.q_proj\n\
+            \            - model.layers.8.self_attn.k_proj\n          post_oneshot_calibration:\
+            \ true\n          scheme_overrides:\n            # Enable channelwise\
+            \ quantization for better accuracy\n            Linear:\n            \
+            \  weights:\n                num_bits: 8\n                symmetric: true\n\
+            \                strategy: channel\n            MatMulLeftInput_QK:\n\
+            \              input_activations:\n                num_bits: 8\n     \
+            \           symmetric: true\n            # For the embeddings, only weight-quantization\
+            \ makes sense\n            Embedding:\n              input_activations:\
+            \ null\n              weights:\n                num_bits: 8\n        \
+            \        symmetric: false\n        SparseGPTModifier:\n          sparsity:\
+            \ 0.5\n          block_size: 128\n          sequential_update: false\n\
+            \          quantize: true\n          percdamp: 0.01\n          mask_structure:\
+            \ \"0:0\"\n          targets: [\"re:model.layers.\\\\\\d*$\"]\n    \"\"\
+            \"\n\n    oneshot(\n        model=model,\n        tokenizer=tokenizer,\n\
+            \        dataset=dataset,\n        recipe=recipe,\n        output_dir=compress_model_path,\n\
+            \    )\n\nimport argparse\n_parser = argparse.ArgumentParser(prog='Sparse\
+            \ model', description='')\n_parser.add_argument(\"--model-path\", dest=\"\
+            model_path\", type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"\
+            --compress-model-path\", dest=\"compress_model_path\", type=str, required=True,\
+            \ default=argparse.SUPPRESS)\n_parser.add_argument(\"--ds\", dest=\"ds\"\
+            , type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"\
+            --precision\", dest=\"precision\", type=str, required=True, default=argparse.SUPPRESS)\n\
+            _parsed_args = vars(_parser.parse_args())\n\n_outputs = sparse_model(**_parsed_args)\n"
+          image: quay.io/ltomasbo/sparseml
+          resources:
+            limits:
+              nvidia.com/gpu: '1'
+            requests:
+              nvidia.com/gpu: '1'
+          volumeMounts:
+          - mountPath: /mnt/models
+            name: models-shared
+        volumes:
+        - name: models-shared
+          persistentVolumeClaim:
+            claimName: models-shared
+        metadata:
+          labels:
+            pipelines.kubeflow.org/cache_enabled: "true"
+          annotations:
+            pipelines.kubeflow.org/component_spec_digest: '{"name": "Sparse model",
+              "outputs": [], "version": "Sparse model@sha256=a8d9e5b63cc3a80a91849b069bb939864e5940ac527425dede3e2402bee72cc0"}'
+      when:
+      - input: $(tasks.condition-1.results.outcome)
+        operator: in
+        values:
+        - "true"
+      runAfter:
+      - download-model
+    - name: eval-model
+      params:
+      - name: eval_batch_size
+        value: $(params.eval_batch_size)
+      - name: eval_task
+        value: $(params.eval_task)
+      taskSpec:
+        steps:
+        - name: main
+          args:
+          - --model-path
+          - /mnt/models/sparse-llm
+          - --tasks
+          - $(inputs.params.eval_task)
+          - --batch-size
+          - $(inputs.params.eval_batch_size)
+          command:
+          - sh
+          - -c
+          - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
+            'datasets' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet
+            --no-warn-script-location 'datasets' --user) && "$0" "$@"
+          - sh
+          - -ec
+          - |
+            program_path=$(mktemp)
+            printf "%s" "$0" > "$program_path"
+            python3 -u "$program_path" "$@"
+          - |
+            def eval_model(model_path, tasks, batch_size):
+                #from sparseml import evaluate
+                #eval = evaluate(
+                #    model_path,
+                #    datasets=ds,
+                #    integration=integration,
+                #    limit=100
+                #)
+                #print(eval)
+                import subprocess
+                import os
+
+                model_args = "pretrained=" + model_path  # + ",trust_remote_code=True"
+
+                # Execute the huggingface_hub-cli command
+                env = os.environ.copy()
+                env["CUDA_VISIBLE_DEVICES"] = "0"
+                result = subprocess.run(["python", "./lm-evaluation-harness/main.py",
+                                         "--model", "sparseml",
+                                         "--model_args", model_args,
+                                         "--tasks", tasks,
+                                         "--batch_size", batch_size,
+                                         "--no_cache",
+                                         "--write_out",
+                                         "--device", "cuda:0",
+                                         "--num_fewshot", "0",
+                                         "--limit", "1000"],
+                                        capture_output=True, text=True, env=env)
+
+                # Check for errors or output
+                if result.returncode == 0:
+                    print("Model evaluated successfully:")
+                    print(result.stdout)
+                else:
+                    print("Error evaluating the model:")
+                    print(result.stderr)
+
+            import argparse
+            _parser = argparse.ArgumentParser(prog='Eval model', description='')
+            _parser.add_argument("--model-path", dest="model_path", type=str, required=True, default=argparse.SUPPRESS)
+            _parser.add_argument("--tasks", dest="tasks", type=str, required=True, default=argparse.SUPPRESS)
+            _parser.add_argument("--batch-size", dest="batch_size", type=str, required=True, default=argparse.SUPPRESS)
+            _parsed_args = vars(_parser.parse_args())
+
+            _outputs = eval_model(**_parsed_args)
+          image: quay.io/ltomasbo/sparseml:eval2
+          resources:
+            limits:
+              nvidia.com/gpu: '1'
+            requests:
+              nvidia.com/gpu: '1'
+          volumeMounts:
+          - mountPath: /mnt/models
+            name: models-shared
+        params:
+        - name: eval_batch_size
+        - name: eval_task
+        volumes:
+        - name: models-shared
+          persistentVolumeClaim:
+            claimName: models-shared
+        metadata:
+          labels:
+            pipelines.kubeflow.org/cache_enabled: "true"
+          annotations:
+            pipelines.kubeflow.org/component_spec_digest: '{"name": "Eval model",
+              "outputs": [], "version": "Eval model@sha256=757c738c7569de3a066f85ad25f2cfbba44df149f165a5d1a7b98de9c867d180"}'
+      when:
+      - input: $(tasks.condition-2.results.outcome)
+        operator: in
+        values:
+        - "true"
+      - input: $(tasks.condition-1.results.outcome)
+        operator: in
+        values:
+        - "true"
+      runAfter:
+      - sparse-model
+    - name: eval-model-2
+      params:
+      - name: eval_batch_size
+        value: $(params.eval_batch_size)
+      - name: eval_task
+        value: $(params.eval_task)
+      taskSpec:
+        steps:
+        - name: main
+          args:
+          - --model-path
+          - /mnt/models/llm
+          - --tasks
+          - $(inputs.params.eval_task)
+          - --batch-size
+          - $(inputs.params.eval_batch_size)
+          command:
+          - sh
+          - -c
+          - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
+            'datasets' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet
+            --no-warn-script-location 'datasets' --user) && "$0" "$@"
+          - sh
+          - -ec
+          - |
+            program_path=$(mktemp)
+            printf "%s" "$0" > "$program_path"
+            python3 -u "$program_path" "$@"
+          - |
+            def eval_model(model_path, tasks, batch_size):
+                #from sparseml import evaluate
+                #eval = evaluate(
+                #    model_path,
+                #    datasets=ds,
+                #    integration=integration,
+                #    limit=100
+                #)
+                #print(eval)
+                import subprocess
+                import os
+
+                model_args = "pretrained=" + model_path  # + ",trust_remote_code=True"
+
+                # Execute the huggingface_hub-cli command
+                env = os.environ.copy()
+                env["CUDA_VISIBLE_DEVICES"] = "0"
+                result = subprocess.run(["python", "./lm-evaluation-harness/main.py",
+                                         "--model", "sparseml",
+                                         "--model_args", model_args,
+                                         "--tasks", tasks,
+                                         "--batch_size", batch_size,
+                                         "--no_cache",
+                                         "--write_out",
+                                         "--device", "cuda:0",
+                                         "--num_fewshot", "0",
+                                         "--limit", "1000"],
+                                        capture_output=True, text=True, env=env)
+
+                # Check for errors or output
+                if result.returncode == 0:
+                    print("Model evaluated successfully:")
+                    print(result.stdout)
+                else:
+                    print("Error evaluating the model:")
+                    print(result.stderr)
+
+            import argparse
+            _parser = argparse.ArgumentParser(prog='Eval model', description='')
+            _parser.add_argument("--model-path", dest="model_path", type=str, required=True, default=argparse.SUPPRESS)
+            _parser.add_argument("--tasks", dest="tasks", type=str, required=True, default=argparse.SUPPRESS)
+            _parser.add_argument("--batch-size", dest="batch_size", type=str, required=True, default=argparse.SUPPRESS)
+            _parsed_args = vars(_parser.parse_args())
+
+            _outputs = eval_model(**_parsed_args)
+          image: quay.io/ltomasbo/sparseml:eval2
+          resources:
+            limits:
+              nvidia.com/gpu: '1'
+            requests:
+              nvidia.com/gpu: '1'
+          volumeMounts:
+          - mountPath: /mnt/models
+            name: models-shared
+        params:
+        - name: eval_batch_size
+        - name: eval_task
+        volumes:
+        - name: models-shared
+          persistentVolumeClaim:
+            claimName: models-shared
+        metadata:
+          labels:
+            pipelines.kubeflow.org/cache_enabled: "true"
+          annotations:
+            pipelines.kubeflow.org/component_spec_digest: '{"name": "Eval model",
+              "outputs": [], "version": "Eval model@sha256=757c738c7569de3a066f85ad25f2cfbba44df149f165a5d1a7b98de9c867d180"}'
+      when:
+      - input: $(tasks.condition-2.results.outcome)
+        operator: in
+        values:
+        - "true"
+      - input: $(tasks.condition-1.results.outcome)
+        operator: in
+        values:
+        - "true"
+      runAfter:
+      - download-model
+    - name: export-model
+      taskSpec:
+        steps:
+        - name: main
+          args:
+          - --model-path
+          - /mnt/models/sparse-llm
+          - --exported-model-path
+          - /mnt/models/exported
+          command:
+          - sh
+          - -ec
+          - |
+            program_path=$(mktemp)
+            printf "%s" "$0" > "$program_path"
+            python3 -u "$program_path" "$@"
+          - |
+            def export_model(model_path, exported_model_path):
+                from sparseml import export
+
+                export(
+                    model_path,
+                    task="text-generation",
+                    sequence_length=1024,
+                    target_path=exported_model_path
+                )
+
+            import argparse
+            _parser = argparse.ArgumentParser(prog='Export model', description='')
+            _parser.add_argument("--model-path", dest="model_path", type=str, required=True, default=argparse.SUPPRESS)
+            _parser.add_argument("--exported-model-path", dest="exported_model_path", type=str, required=True, default=argparse.SUPPRESS)
+            _parsed_args = vars(_parser.parse_args())
+
+            _outputs = export_model(**_parsed_args)
+          image: quay.io/ltomasbo/sparseml
+          volumeMounts:
+          - mountPath: /mnt/models
+            name: models-shared
+        volumes:
+        - name: models-shared
+          persistentVolumeClaim:
+            claimName: models-shared
+        metadata:
+          labels:
+            pipelines.kubeflow.org/cache_enabled: "true"
+          annotations:
+            pipelines.kubeflow.org/component_spec_digest: '{"name": "Export model",
+              "outputs": [], "version": "Export model@sha256=a79109543dc315a8a14a3b63b1ddc4a80a382b6cfcae86cb564a00e867999572"}'
+      when:
+      - input: $(tasks.condition-2.results.outcome)
+        operator: in
+        values:
+        - "true"
+      - input: $(tasks.condition-1.results.outcome)
+        operator: in
+        values:
+        - "true"
+      runAfter:
+      - eval-model
+    - name: upload-pruned-model
+      taskSpec:
+        steps:
+        - name: main
+          args:
+          - --model-path
+          - /mnt/models/exported
+          command:
+          - sh
+          - -c
+          - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
+            'boto3' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet
+            --no-warn-script-location 'boto3' --user) && "$0" "$@"
+          - sh
+          - -ec
+          - |
+            program_path=$(mktemp)
+            printf "%s" "$0" > "$program_path"
+            python3 -u "$program_path" "$@"
+          - |
+            def upload_pruned_model(model_path):
+                import os
+                from boto3 import client
+
+                print('Commencing results upload.')
+                print(os.environ)
+
+                s3_endpoint_url = os.environ["s3_host"]
+                s3_access_key = os.environ["s3_access_key"]
+                s3_secret_key = os.environ["s3_secret_access_key"]
+                s3_bucket_name = os.environ["s3_bucket"]
+
+                print(f'Uploading predictions to bucket {s3_bucket_name} '
+                      f'to S3 storage at {s3_endpoint_url}')
+
+                s3_client = client(
+                    's3', endpoint_url=s3_endpoint_url,
+                    aws_access_key_id=s3_access_key, aws_secret_access_key=s3_secret_key, verify=False
+                )
+
+                # Walk through the local folder and upload files
+                for root, dirs, files in os.walk(model_path):
+                    for file in files:
+                        local_file_path = os.path.join(root, file)
+                        s3_file_path = os.path.join(s3_bucket_name, local_file_path[len(model_path)+1:])
+                        s3_client.upload_file(local_file_path, s3_bucket_name, s3_file_path)
+                        print(f'Uploaded {local_file_path}')
+
+                print('Finished uploading results.')
+
+            import argparse
+            _parser = argparse.ArgumentParser(prog='Upload pruned model', description='')
+            _parser.add_argument("--model-path", dest="model_path", type=str, required=True, default=argparse.SUPPRESS)
+            _parsed_args = vars(_parser.parse_args())
+
+            _outputs = upload_pruned_model(**_parsed_args)
+          env:
+          - name: s3_access_key
+            valueFrom:
+              secretKeyRef:
+                key: AWS_ACCESS_KEY_ID
+                name: aws-connection-models
+          - name: s3_secret_access_key
+            valueFrom:
+              secretKeyRef:
+                key: AWS_SECRET_ACCESS_KEY
+                name: aws-connection-models
+          - name: s3_host
+            valueFrom:
+              secretKeyRef:
+                key: AWS_S3_ENDPOINT
+                name: aws-connection-models
+          - name: s3_bucket
+            valueFrom:
+              secretKeyRef:
+                key: AWS_S3_BUCKET
+                name: aws-connection-models
+          image: registry.access.redhat.com/ubi9/python-311
+          volumeMounts:
+          - mountPath: /mnt/models
+            name: models-shared
+        volumes:
+        - name: models-shared
+          persistentVolumeClaim:
+            claimName: models-shared
+        metadata:
+          labels:
+            pipelines.kubeflow.org/cache_enabled: "true"
+          annotations:
+            pipelines.kubeflow.org/component_spec_digest: '{"name": "Upload pruned
+              model", "outputs": [], "version": "Upload pruned model@sha256=ab31d480033cb804d5c422ed2a95ca99a6413d4ac52fdf235dfcc96720cdc882"}'
+      when:
+      - input: $(tasks.condition-2.results.outcome)
+        operator: in
+        values:
+        - "true"
+      - input: $(tasks.condition-1.results.outcome)
+        operator: in
+        values:
+        - "true"
+      runAfter:
+      - export-model
+    - name: export-model-2
+      taskSpec:
+        steps:
+        - name: main
+          args:
+          - --model-path
+          - /mnt/models/sparse-llm
+          - --exported-model-path
+          - /mnt/models/exported
+          command:
+          - sh
+          - -ec
+          - |
+            program_path=$(mktemp)
+            printf "%s" "$0" > "$program_path"
+            python3 -u "$program_path" "$@"
+          - |
+            def export_model(model_path, exported_model_path):
+                from sparseml import export
+
+                export(
+                    model_path,
+                    task="text-generation",
+                    sequence_length=1024,
+                    target_path=exported_model_path
+                )
+
+            import argparse
+            _parser = argparse.ArgumentParser(prog='Export model', description='')
+            _parser.add_argument("--model-path", dest="model_path", type=str, required=True, default=argparse.SUPPRESS)
+            _parser.add_argument("--exported-model-path", dest="exported_model_path", type=str, required=True, default=argparse.SUPPRESS)
+            _parsed_args = vars(_parser.parse_args())
+
+            _outputs = export_model(**_parsed_args)
+          image: quay.io/ltomasbo/sparseml
+          volumeMounts:
+          - mountPath: /mnt/models
+            name: models-shared
+        volumes:
+        - name: models-shared
+          persistentVolumeClaim:
+            claimName: models-shared
+        metadata:
+          labels:
+            pipelines.kubeflow.org/cache_enabled: "true"
+          annotations:
+            pipelines.kubeflow.org/component_spec_digest: '{"name": "Export model",
+              "outputs": [], "version": "Export model@sha256=a79109543dc315a8a14a3b63b1ddc4a80a382b6cfcae86cb564a00e867999572"}'
+      when:
+      - input: $(tasks.condition-3.results.outcome)
+        operator: in
+        values:
+        - "true"
+      - input: $(tasks.condition-1.results.outcome)
+        operator: in
+        values:
+        - "true"
+      runAfter:
+      - sparse-model
+    - name: upload-pruned-model-2
+      taskSpec:
+        steps:
+        - name: main
+          args:
+          - --model-path
+          - /mnt/models/exported
+          command:
+          - sh
+          - -c
+          - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
+            'boto3' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet
+            --no-warn-script-location 'boto3' --user) && "$0" "$@"
+          - sh
+          - -ec
+          - |
+            program_path=$(mktemp)
+            printf "%s" "$0" > "$program_path"
+            python3 -u "$program_path" "$@"
+          - |
+            def upload_pruned_model(model_path):
+                import os
+                from boto3 import client
+
+                print('Commencing results upload.')
+                print(os.environ)
+
+                s3_endpoint_url = os.environ["s3_host"]
+                s3_access_key = os.environ["s3_access_key"]
+                s3_secret_key = os.environ["s3_secret_access_key"]
+                s3_bucket_name = os.environ["s3_bucket"]
+
+                print(f'Uploading predictions to bucket {s3_bucket_name} '
+                      f'to S3 storage at {s3_endpoint_url}')
+
+                s3_client = client(
+                    's3', endpoint_url=s3_endpoint_url,
+                    aws_access_key_id=s3_access_key, aws_secret_access_key=s3_secret_key, verify=False
+                )
+
+                # Walk through the local folder and upload files
+                for root, dirs, files in os.walk(model_path):
+                    for file in files:
+                        local_file_path = os.path.join(root, file)
+                        s3_file_path = os.path.join(s3_bucket_name, local_file_path[len(model_path)+1:])
+                        s3_client.upload_file(local_file_path, s3_bucket_name, s3_file_path)
+                        print(f'Uploaded {local_file_path}')
+
+                print('Finished uploading results.')
+
+            import argparse
+            _parser = argparse.ArgumentParser(prog='Upload pruned model', description='')
+            _parser.add_argument("--model-path", dest="model_path", type=str, required=True, default=argparse.SUPPRESS)
+            _parsed_args = vars(_parser.parse_args())
+
+            _outputs = upload_pruned_model(**_parsed_args)
+          env:
+          - name: s3_access_key
+            valueFrom:
+              secretKeyRef:
+                key: AWS_ACCESS_KEY_ID
+                name: aws-connection-models
+          - name: s3_secret_access_key
+            valueFrom:
+              secretKeyRef:
+                key: AWS_SECRET_ACCESS_KEY
+                name: aws-connection-models
+          - name: s3_host
+            valueFrom:
+              secretKeyRef:
+                key: AWS_S3_ENDPOINT
+                name: aws-connection-models
+          - name: s3_bucket
+            valueFrom:
+              secretKeyRef:
+                key: AWS_S3_BUCKET
+                name: aws-connection-models
+          image: registry.access.redhat.com/ubi9/python-311
+          volumeMounts:
+          - mountPath: /mnt/models
+            name: models-shared
+        volumes:
+        - name: models-shared
+          persistentVolumeClaim:
+            claimName: models-shared
+        metadata:
+          labels:
+            pipelines.kubeflow.org/cache_enabled: "true"
+          annotations:
+            pipelines.kubeflow.org/component_spec_digest: '{"name": "Upload pruned
+              model", "outputs": [], "version": "Upload pruned model@sha256=ab31d480033cb804d5c422ed2a95ca99a6413d4ac52fdf235dfcc96720cdc882"}'
+      when:
+      - input: $(tasks.condition-3.results.outcome)
+        operator: in
+        values:
+        - "true"
+      - input: $(tasks.condition-1.results.outcome)
+        operator: in
+        values:
+        - "true"
+      runAfter:
+      - export-model-2
+    - name: export-model-3
+      taskSpec:
+        steps:
+        - name: main
+          args:
+          - --model-path
+          - /mnt/models/llm
+          - --exported-model-path
+          - /mnt/models/exported
+          command:
+          - sh
+          - -ec
+          - |
+            program_path=$(mktemp)
+            printf "%s" "$0" > "$program_path"
+            python3 -u "$program_path" "$@"
+          - |
+            def export_model(model_path, exported_model_path):
+                from sparseml import export
+
+                export(
+                    model_path,
+                    task="text-generation",
+                    sequence_length=1024,
+                    target_path=exported_model_path
+                )
+
+            import argparse
+            _parser = argparse.ArgumentParser(prog='Export model', description='')
+            _parser.add_argument("--model-path", dest="model_path", type=str, required=True, default=argparse.SUPPRESS)
+            _parser.add_argument("--exported-model-path", dest="exported_model_path", type=str, required=True, default=argparse.SUPPRESS)
+            _parsed_args = vars(_parser.parse_args())
+
+            _outputs = export_model(**_parsed_args)
+          image: quay.io/ltomasbo/sparseml
+          volumeMounts:
+          - mountPath: /mnt/models
+            name: models-shared
+        volumes:
+        - name: models-shared
+          persistentVolumeClaim:
+            claimName: models-shared
+        metadata:
+          labels:
+            pipelines.kubeflow.org/cache_enabled: "true"
+          annotations:
+            pipelines.kubeflow.org/component_spec_digest: '{"name": "Export model",
+              "outputs": [], "version": "Export model@sha256=a79109543dc315a8a14a3b63b1ddc4a80a382b6cfcae86cb564a00e867999572"}'
+      when:
+      - input: $(tasks.condition-4.results.outcome)
+        operator: in
+        values:
+        - "true"
+      runAfter:
+      - download-model
+    - name: upload-pruned-model-3
+      taskSpec:
+        steps:
+        - name: main
+          args:
+          - --model-path
+          - /mnt/models/exported
+          command:
+          - sh
+          - -c
+          - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
+            'boto3' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet
+            --no-warn-script-location 'boto3' --user) && "$0" "$@"
+          - sh
+          - -ec
+          - |
+            program_path=$(mktemp)
+            printf "%s" "$0" > "$program_path"
+            python3 -u "$program_path" "$@"
+          - |
+            def upload_pruned_model(model_path):
+                import os
+                from boto3 import client
+
+                print('Commencing results upload.')
+                print(os.environ)
+
+                s3_endpoint_url = os.environ["s3_host"]
+                s3_access_key = os.environ["s3_access_key"]
+                s3_secret_key = os.environ["s3_secret_access_key"]
+                s3_bucket_name = os.environ["s3_bucket"]
+
+                print(f'Uploading predictions to bucket {s3_bucket_name} '
+                      f'to S3 storage at {s3_endpoint_url}')
+
+                s3_client = client(
+                    's3', endpoint_url=s3_endpoint_url,
+                    aws_access_key_id=s3_access_key, aws_secret_access_key=s3_secret_key, verify=False
+                )
+
+                # Walk through the local folder and upload files
+                for root, dirs, files in os.walk(model_path):
+                    for file in files:
+                        local_file_path = os.path.join(root, file)
+                        s3_file_path = os.path.join(s3_bucket_name, local_file_path[len(model_path)+1:])
+                        s3_client.upload_file(local_file_path, s3_bucket_name, s3_file_path)
+                        print(f'Uploaded {local_file_path}')
+
+                print('Finished uploading results.')
+
+            import argparse
+            _parser = argparse.ArgumentParser(prog='Upload pruned model', description='')
+            _parser.add_argument("--model-path", dest="model_path", type=str, required=True, default=argparse.SUPPRESS)
+            _parsed_args = vars(_parser.parse_args())
+
+            _outputs = upload_pruned_model(**_parsed_args)
+          env:
+          - name: s3_access_key
+            valueFrom:
+              secretKeyRef:
+                key: AWS_ACCESS_KEY_ID
+                name: aws-connection-models
+          - name: s3_secret_access_key
+            valueFrom:
+              secretKeyRef:
+                key: AWS_SECRET_ACCESS_KEY
+                name: aws-connection-models
+          - name: s3_host
+            valueFrom:
+              secretKeyRef:
+                key: AWS_S3_ENDPOINT
+                name: aws-connection-models
+          - name: s3_bucket
+            valueFrom:
+              secretKeyRef:
+                key: AWS_S3_BUCKET
+                name: aws-connection-models
+          image: registry.access.redhat.com/ubi9/python-311
+          volumeMounts:
+          - mountPath: /mnt/models
+            name: models-shared
+        volumes:
+        - name: models-shared
+          persistentVolumeClaim:
+            claimName: models-shared
+        metadata:
+          labels:
+            pipelines.kubeflow.org/cache_enabled: "true"
+          annotations:
+            pipelines.kubeflow.org/component_spec_digest: '{"name": "Upload pruned
+              model", "outputs": [], "version": "Upload pruned model@sha256=ab31d480033cb804d5c422ed2a95ca99a6413d4ac52fdf235dfcc96720cdc882"}'
+      when:
+      - input: $(tasks.condition-4.results.outcome)
+        operator: in
+        values:
+        - "true"
+      runAfter:
+      - export-model-3
+    - name: condition-1
+      params:
+      - name: operand1
+        value: $(params.sparse)
+      - name: operand2
+        value: "True"
+      - name: operator
+        value: ==
+      taskSpec:
+        results:
+        - name: outcome
+          type: string
+          description: Conditional task outcome
+        params:
+        - name: operand1
+        - name: operand2
+        - name: operator
+        steps:
+        - name: main
+          command:
+          - sh
+          - -ec
+          - program_path=$(mktemp); printf "%s" "$0" > "$program_path";  python3 -u
+            "$program_path" "$1" "$2"
+          args:
+          - |
+            import sys
+            input1=str.rstrip(sys.argv[1])
+            input2=str.rstrip(sys.argv[2])
+            try:
+              input1=int(input1)
+              input2=int(input2)
+            except:
+              input1=str(input1)
+            outcome="true" if (input1 $(inputs.params.operator) input2) else "false"
+            f = open("/tekton/results/outcome", "w")
+            f.write(outcome)
+            f.close()
+          - $(inputs.params.operand1)
+          - $(inputs.params.operand2)
+          image: python:3.9.17-alpine3.18
+    - name: condition-2
+      params:
+      - name: operand1
+        value: $(params.eval)
+      - name: operand2
+        value: "True"
+      - name: operator
+        value: ==
+      taskSpec:
+        results:
+        - name: outcome
+          type: string
+          description: Conditional task outcome
+        params:
+        - name: operand1
+        - name: operand2
+        - name: operator
+        steps:
+        - name: main
+          command:
+          - sh
+          - -ec
+          - program_path=$(mktemp); printf "%s" "$0" > "$program_path";  python3 -u
+            "$program_path" "$1" "$2"
+          args:
+          - |
+            import sys
+            input1=str.rstrip(sys.argv[1])
+            input2=str.rstrip(sys.argv[2])
+            try:
+              input1=int(input1)
+              input2=int(input2)
+            except:
+              input1=str(input1)
+            outcome="true" if (input1 $(inputs.params.operator) input2) else "false"
+            f = open("/tekton/results/outcome", "w")
+            f.write(outcome)
+            f.close()
+          - $(inputs.params.operand1)
+          - $(inputs.params.operand2)
+          image: python:3.9.17-alpine3.18
+      when:
+      - input: $(tasks.condition-1.results.outcome)
+        operator: in
+        values:
+        - "true"
+    - name: condition-3
+      params:
+      - name: operand1
+        value: $(params.eval)
+      - name: operand2
+        value: "False"
+      - name: operator
+        value: ==
+      taskSpec:
+        results:
+        - name: outcome
+          type: string
+          description: Conditional task outcome
+        params:
+        - name: operand1
+        - name: operand2
+        - name: operator
+        steps:
+        - name: main
+          command:
+          - sh
+          - -ec
+          - program_path=$(mktemp); printf "%s" "$0" > "$program_path";  python3 -u
+            "$program_path" "$1" "$2"
+          args:
+          - |
+            import sys
+            input1=str.rstrip(sys.argv[1])
+            input2=str.rstrip(sys.argv[2])
+            try:
+              input1=int(input1)
+              input2=int(input2)
+            except:
+              input1=str(input1)
+            outcome="true" if (input1 $(inputs.params.operator) input2) else "false"
+            f = open("/tekton/results/outcome", "w")
+            f.write(outcome)
+            f.close()
+          - $(inputs.params.operand1)
+          - $(inputs.params.operand2)
+          image: python:3.9.17-alpine3.18
+      when:
+      - input: $(tasks.condition-1.results.outcome)
+        operator: in
+        values:
+        - "true"
+    - name: condition-4
+      params:
+      - name: operand1
+        value: $(params.sparse)
+      - name: operand2
+        value: "False"
+      - name: operator
+        value: ==
+      taskSpec:
+        results:
+        - name: outcome
+          type: string
+          description: Conditional task outcome
+        params:
+        - name: operand1
+        - name: operand2
+        - name: operator
+        steps:
+        - name: main
+          command:
+          - sh
+          - -ec
+          - program_path=$(mktemp); printf "%s" "$0" > "$program_path";  python3 -u
+            "$program_path" "$1" "$2"
+          args:
+          - |
+            import sys
+            input1=str.rstrip(sys.argv[1])
+            input2=str.rstrip(sys.argv[2])
+            try:
+              input1=int(input1)
+              input2=int(input2)
+            except:
+              input1=str(input1)
+            outcome="true" if (input1 $(inputs.params.operator) input2) else "false"
+            f = open("/tekton/results/outcome", "w")
+            f.write(outcome)
+            f.close()
+          - $(inputs.params.operand1)
+          - $(inputs.params.operand2)
+          image: python:3.9.17-alpine3.18
+  taskRunSpecs:
+  - pipelineTaskName: sparse-model
+    taskPodTemplate:
+      tolerations:
+      - effect: NoSchedule
+        key: nvidia.com/gpu
+        operator: Equal
+        value: "true"
+      nodeSelector:
+        nvidia.com/gpu.present: "true"
+  - pipelineTaskName: eval-model
+    taskPodTemplate:
+      tolerations:
+      - effect: NoSchedule
+        key: nvidia.com/gpu
+        operator: Equal
+        value: "true"
+      nodeSelector:
+        nvidia.com/gpu.present: "true"
+  - pipelineTaskName: eval-model-2
+    taskPodTemplate:
+      tolerations:
+      - effect: NoSchedule
+        key: nvidia.com/gpu
+        operator: Equal
+        value: "true"
+      nodeSelector:
+        nvidia.com/gpu.present: "true"

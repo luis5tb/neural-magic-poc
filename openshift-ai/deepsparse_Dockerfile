@@ -1,0 +1,16 @@
+FROM registry.access.redhat.com/ubi9/python-39
+
+RUN mkdir /.cache && chgrp -R 0 /.cache && chmod -R g=u /.cache
+
+ENV VIRTUAL_ENV=/venv
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+
+RUN python3 -m venv $VIRTUAL_ENV && \
+    pip3 install --no-cache-dir --upgrade pip && \
+    pip3 install --no-cache-dir deepsparse-nightly[llm,server,onnxruntime] openai
+
+COPY ./config.yaml /server-config.yaml
+
+RUN mkdir /mnt/models && chgrp -R 0 /mnt/models && chmod -R g=u /mnt/models
+
+ENTRYPOINT deepsparse.server --integration openai --config-file /server-config.yaml --port 8080

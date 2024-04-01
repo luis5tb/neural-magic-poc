@@ -1,0 +1,6 @@
+endpoints:
+  - task: text_generation
+    #model: zoo:codellama-7b-evolcodealpaca_codellama_pretrain-pruned60_quantized
+    #model: hf:neuralmagic/TinyLlama-1.1B-Chat-v0.4-pruned50-quant-ds
+    #model: /mnt/models/deployment
+    model: /mnt/models-aux
