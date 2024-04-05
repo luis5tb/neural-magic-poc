@@ -1,4 +1,9 @@
 endpoints:
-    - task: sentiment-analysis
-      route: /predict
-      model: zoo:nlp/sentiment_analysis/distilbert-none/pytorch/huggingface/sst2/pruned80_quant-none-vnni
+    - task: yolo
+      model: zoo:cv/detection/yolov5-s/pytorch/ultralytics/coco/pruned65_quant-none
+      route: /spare/yolo
+      name: sparse
+    - task: yolo
+      model: zoo:cv/detection/yolov5-s/pytorch/ultralytics/coco/base-none
+      route: /dense/yolo
+      name: dense
