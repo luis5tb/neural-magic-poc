@@ -8,7 +8,7 @@ spec:
     - ReadWriteOnce
   resources:
     requests:
-      storage: 20Gi
+      storage: 120Gi
   volumeMode: Filesystem
 ---
 kind: Secret
@@ -40,8 +40,8 @@ spec:
       containers:
         - resources:
             limits:
-              cpu: 250m
-              memory: 1Gi
+              cpu: 500m
+              memory: 4Gi
             requests:
               cpu: 20m
               memory: 100Mi
@@ -86,7 +86,7 @@ spec:
               subPath: minio
           terminationMessagePolicy: File
           image: >-
-            quay.io/minio/minio:RELEASE.2023-06-19T19-52-50Z
+            quay.io/minio/minio:RELEASE.2024-03-26T22-10-45Z
           args:
             - server
             - /data
