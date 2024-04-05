@@ -4,8 +4,8 @@ labels:
   opendatahub.io/dashboard: "true"
 metadata:
   annotations:
-    openshift.io/display-name: DeepSparse Runtime
-  name: deepsparse-runtime
+    openshift.io/display-name: nm-vLLM Runtime
+  name: nm-vllm-runtime
 spec:
   volumes:
     - name: kserve-aux
@@ -13,13 +13,12 @@ spec:
   containers:
     - args:
         - >
-          cp -r /mnt/models/deployment/* /mnt/models-aux &&
-
-          deepsparse.server --integration openai --config-file /server-config.yaml --port 8080
+          cp -r /mnt/models/* /mnt/models-aux &&
+          python3 -m vllm.entrypoints.openai.api_server --model /mnt/models-aux --sparsity sparse_w16a16 --port 8080
       command:
         - /bin/sh
         - -c
-      image: quay.io/ltomasbo/neural-magic:llm-aux
+      image: quay.io/ltomasbo/neural-magic:nm-vllm
       name: kserve-container
       ports:
         - containerPort: 8080

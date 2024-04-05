@@ -1,0 +1,8 @@
+FROM registry.access.redhat.com/ubi9/python-39
+
+RUN pip3 install --no-cache-dir --upgrade pip && \
+    pip3 install --no-cache-dir nm-vllm[sparse] && \
+    pip3 uninstall -y nm-transformers-nightly transformers -qqq && \
+    pip3 install transformers "tokenizers<0.15" -qqq
+
+ENTRYPOINT python3 -m vllm.entrypoints.openai.api_server --model /mnt/models-aux --sparsity sparse_w16a16

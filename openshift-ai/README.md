@@ -62,12 +62,14 @@ Build the container with:
 
 ```bash
 podman build -t quay.io/USER/neural-magic:deepsparse -f deepsparse_Dockerfile .
+podman build -t quay.io/USER/neural-magic:nm-vllm -f nmvllm_Dockerfile .
 ```
 
 And push it to a registry
 
 ```bash
 podman push quay.io/USER/neural-magic:deepsparse
+podman push quay.io/USER/neural-magic:nm-vllm
 ```
 
 ### Deploy InferenceService
