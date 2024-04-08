@@ -14,10 +14,29 @@ MODEL_AUX = "/mnt/models-aux"
 
 def get_answer(question, url, model):
     client = OpenAI(base_url=url, api_key="EMPTY")
-    model = client.models.list().data[0][1]
+    #model = client.models.list().data[0][1]
+    model = client.models.list().data[0].id
     print(f"Accessing model API '{model}'")
 
-    completion = client.completions.create(model=model, prompt=question, max_tokens=100, temperature=0.2)
+    #completion = client.completions.create(model=model, prompt=question, max_tokens=100, temperature=0.2)
+    # Completion API
+    stream = False
+    prompt = "The best thing about"
+    completion = client.completions.create(
+        model=model,
+        prompt=prompt,
+        max_tokens=100,
+        temperature=0,
+        n=1,
+        stream=stream)
+
+    if stream:
+        for c in completion:
+            print(c)
+    else:
+        print(f"\n----- Prompt:\n{prompt}")
+        print(f"\n----- Completion:\n{completion.choices[0].text}")
+    
     return completion.choices[0].text
 
 def get_answer_req(question, url, model):
