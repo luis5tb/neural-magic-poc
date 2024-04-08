@@ -66,11 +66,11 @@ def quantize_cpu_model(model_path:str, compress_model_path: str, ds: str):
             - MatMulOutput_QK
             - MatMulOutput_PV
             # Skip quantizing the layers with the most sensitive activations
-            - model.layers.21.mlp.down_proj
-            - model.layers.7.mlp.down_proj
-            - model.layers.2.mlp.down_proj
-            - model.layers.8.self_attn.q_proj
-            - model.layers.8.self_attn.k_proj
+            #- model.layers.21.mlp.down_proj
+            #- model.layers.7.mlp.down_proj
+            #- model.layers.2.mlp.down_proj
+            #- model.layers.8.self_attn.q_proj
+            #- model.layers.8.self_attn.k_proj
           post_oneshot_calibration: true
           scheme_overrides:
             # Enable channelwise quantization for better accuracy
@@ -99,7 +99,65 @@ def quantize_cpu_model(model_path:str, compress_model_path: str, ds: str):
     )
 
 def quantize_gpu_model(model_path:str, compress_model_path: str, ds: str):
-    pass
+    # Quantizing an LLM
+    from transformers import AutoTokenizer
+    from datasets import load_dataset
+
+    from auto_gptq import AutoGPTQForCausalLM, BaseQuantizeConfig
+
+    MAX_SEQ_LEN = 512
+    NUM_EXAMPLES = 512
+
+    def preprocess(example):
+        return {"text": tokenizer.apply_chat_template(example["messages"], tokenize=False)}
+
+    print("Loading the dataset and tokenizers")
+    dataset = load_dataset(ds, split="train_sft")
+    tokenizer = AutoTokenizer.from_pretrained(model_path)
+    ds = dataset.shuffle().select(range(NUM_EXAMPLES))
+    ds = ds.map(preprocess)
+
+    examples = [
+        tokenizer(
+            example["text"], padding=False, max_length=MAX_SEQ_LEN, truncation=True,
+        ) for example in ds
+    ]
+
+    print("Loaded the dataset and tokenizers")
+    print("Starting the quantization")
+
+    # Apply GPTQ
+    quantize_config = BaseQuantizeConfig(
+        bits=4,                         # Only support 4 bit
+        group_size=128,                 # Set to g=128 or -1 (for channelwise)
+        desc_act=False,                 # Marlin does not support act_order=True
+        model_file_base_name="model",   # Name of the model.safetensors when we call save_pretrained
+    )
+    print("Applying GPTQ for quantization")
+
+    model = AutoGPTQForCausalLM.from_pretrained(
+        model_path,
+        quantize_config,
+        device_map="auto")
+    model.quantize(examples)
+
+    gptq_save_dir = f"{model_path}-gptq"
+    print(f"Saving gptq model to {gptq_save_dir}")
+    model.save_pretrained(gptq_save_dir)
+    tokenizer.save_pretrained(gptq_save_dir)
+
+    # Convert to Marlin
+    print("Reloading in marlin format")
+    marlin_model = AutoGPTQForCausalLM.from_quantized(
+        gptq_save_dir,
+        use_marlin=True,
+        device_map="auto")
+
+    print(f"Saving model in marlin format to {compress_model_path}")
+    marlin_model.save_pretrained(compress_model_path)
+    tokenizer.save_pretrained(compress_model_path)
+
+    print("Quantization process completed")
 
 def export_model(model_path: str, exported_model_path: str):
     from sparseml import export
@@ -179,19 +237,23 @@ download_op = comp.create_component_from_func(download_model,
                                               base_image='registry.access.redhat.com/ubi9/python-311')
 sparse_op = comp.create_component_from_func(sparse_model,
                                             packages_to_install=["datasets"],
-                                            base_image='quay.io/ltomasbo/sparseml')
+                                            base_image='quay.io/ltomasbo/neural-magic:sparseml')
+#                                            base_image='quay.io/ltomasbo/sparseml')
 quant_cpu_op = comp.create_component_from_func(quantize_cpu_model,
                                             packages_to_install=["datasets"],
-                                            base_image='quay.io/ltomasbo/sparseml')
+                                            base_image='quay.io/ltomasbo/neural-magic:sparseml')
+#                                            base_image='quay.io/ltomasbo/sparseml')
 quant_gpu_op = comp.create_component_from_func(quantize_gpu_model,
-                                            packages_to_install=["datasets"],
-                                            base_image='quay.io/ltomasbo/sparseml')
+                                            packages_to_install=["datasets", "auto-gptq==0.7.1", "torch==2.2.1"],
+                                            base_image='registry.access.redhat.com/ubi9/python-311')
 export_op = comp.create_component_from_func(export_model,
                                             packages_to_install=[],
-                                            base_image='quay.io/ltomasbo/sparseml')
+                                            base_image='quay.io/ltomasbo/neural-magic:sparseml')
+#                                            base_image='quay.io/ltomasbo/sparseml')
 eval_op = comp.create_component_from_func(eval_model,
-                                          packages_to_install=["datasets"],
-                                          base_image='quay.io/ltomasbo/sparseml:eval2')
+                                          packages_to_install=["datasets", "auto-gptq", "optimum"],
+                                          base_image='quay.io/ltomasbo/neural-magic:sparseml_eval')
+#                                          base_image='quay.io/ltomasbo/sparseml:eval2')
 upload_op = comp.create_component_from_func(upload_model,
                                             packages_to_install=["boto3"],
                                             base_image='registry.access.redhat.com/ubi9/python-311')
@@ -275,7 +337,7 @@ def gpu_model_optimization(predecing_task:object, model_path:str,
     with dsl.Condition(quantize == True):
         quant_llm = quant_gpu_op(model_path=model_path,
                                  compress_model_path=QUANT_MODEL_DIR,
-                                 ds="open_platypus")
+                                 ds="HuggingFaceH4/ultrachat_200k")
         quant_llm.add_pvolumes({"/mnt/models": vol})
         quant_llm.add_node_selector_constraint(label_name='nvidia.com/gpu.present', value='true')
         quant_llm.add_toleration(gpu_toleration)
@@ -330,6 +392,7 @@ def gpu_model_optimization(predecing_task:object, model_path:str,
 def sparseml_pipeline(
     model_name:str="TinyLlama/TinyLlama-1.1B-Chat-v1.0",
     inference_target:str='CPU',
+    shared_volume:str='models-shared',
     sparse:bool=True,
     sparsity_ratio:float=0.5,
     quantize:bool=True,
@@ -344,7 +407,7 @@ def sparseml_pipeline(
     vol = V1Volume(
         name='models-shared',
         persistent_volume_claim=V1PersistentVolumeClaimVolumeSource(
-            claim_name='models-shared',)
+            claim_name=shared_volume,)
         )
 
     gpu_toleration = V1Toleration(effect='NoSchedule',

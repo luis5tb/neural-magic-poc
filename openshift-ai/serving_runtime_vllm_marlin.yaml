@@ -1,0 +1,33 @@
+apiVersion: serving.kserve.io/v1alpha1
+kind: ServingRuntime
+labels:
+  opendatahub.io/dashboard: "true"
+metadata:
+  annotations:
+    openshift.io/display-name: nm-vLLM Runtime Marlin
+  name: nm-vllm-runtime-marlin
+spec:
+  volumes:
+    - name: kserve-aux
+      emptyDir: {}
+  containers:
+    - args:
+        - >
+          cp -r /mnt/models/* /mnt/models-aux &&
+          python3 -m vllm.entrypoints.openai.api_server --model /mnt/models-aux --max-model-len 2048 --disable-log-requests
+      command:
+        - /bin/sh
+        - -c
+      image: quay.io/ltomasbo/neural-magic:nm-vllm
+      name: kserve-container
+      ports:
+        - containerPort: 8080
+          protocol: TCP
+      volumeMounts:
+        - name: kserve-aux
+          readOnly: false
+          mountPath: /mnt/models-aux
+  multiModel: false
+  supportedModelFormats:
+    - autoSelect: true
+      name: onnx
