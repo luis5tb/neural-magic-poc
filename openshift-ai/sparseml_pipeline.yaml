@@ -129,8 +129,8 @@ spec:
                     print('Starting downloading the model from HF')
                     # Execute the huggingface_hub-cli command
                     result = subprocess.run(["huggingface-cli", "download", model_name,
-                                            "--local-dir", destination_path,
-                                            "--local-dir-use-symlinks", "False"],
+                                             "--local-dir", destination_path,
+                                             "--local-dir-use-symlinks", "False"],
                                             capture_output=True, text=True)
                     # Check for errors or output
                     if result.returncode == 0:
@@ -176,6 +176,9 @@ spec:
                         s3_client.download_file(s3_bucket_name, file_name, local_file_name)
 
                     print('Model downloaded successfully from S3.')
+
+                elif download_option == "PVC":
+                    print('Model should be already on the volumen.')
 
             import argparse
             _parser = argparse.ArgumentParser(prog='Download model', description='')
@@ -223,7 +226,7 @@ spec:
             pipelines.kubeflow.org/cache_enabled: "true"
           annotations:
             pipelines.kubeflow.org/component_spec_digest: '{"name": "Download model",
-              "outputs": [], "version": "Download model@sha256=eedeeda3d951f67a8468840eb1fff6a408c3f60fc4eb74347c0fd3ee7f7c5326"}'
+              "outputs": [], "version": "Download model@sha256=b7fbdb69001d09507ffd79158bada03ecad235fad1143f8b338b2bf7928c542b"}'
     - name: sparse-model
       params:
       - name: shared_volume
@@ -264,7 +267,7 @@ spec:
                   obcq_modifiers:
                     SparseGPTModifier:
                       sparsity: {sparsity_ratio}
-                      sequential_update: false
+                      sequential_update: true
                       targets: ["re:model.layers.\\\d*$"]
                 """
 
@@ -305,7 +308,7 @@ spec:
             pipelines.kubeflow.org/cache_enabled: "true"
           annotations:
             pipelines.kubeflow.org/component_spec_digest: '{"name": "Sparse model",
-              "outputs": [], "version": "Sparse model@sha256=98a3c6f5bb77d477b038e0358ff6d8ff3908c8d4ace611bb9077d38ab768ae70"}'
+              "outputs": [], "version": "Sparse model@sha256=924ebd9aa551e8f122e4ff6e982a7d38ddca97ea9e006a1ae3af8daf7dce14c1"}'
       when:
       - input: $(tasks.condition-1.results.outcome)
         operator: in

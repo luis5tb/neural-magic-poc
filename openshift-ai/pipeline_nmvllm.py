@@ -59,28 +59,38 @@ def download_model(model_name: str, destination_path: str,
                     if exc.errno != errno.EEXIST:
                         print("Error downloading model")
                         raise
-            print('Download file to')
-            print(file_name)
-            print(local_file_name)
             s3_client.download_file(s3_bucket_name, file_name, local_file_name)
 
         print('Model downloaded successfully from S3.')
+    
+    elif download_option == "PVC":
+        print('Model should be already on the volumen.')
 
 def sparse_model(model_path:str, compress_model_path: str, ds: str,
                  sparsity_ratio: float):
     import sparseml.transformers
+    import torch
+
+    #set the data type of the model to bfloat16 and device_map="auto" which
+    # will place the model on all the gpus available in the system
+    model = sparseml.transformers.SparseAutoModelForCausalLM.from_pretrained(
+        model_path,
+        torch_dtype=torch.bfloat16,
+        device_map="auto"
+    )
 
     recipe = f"""
     test_stage:
       obcq_modifiers:
         SparseGPTModifier:
           sparsity: {sparsity_ratio}
-          sequential_update: false
+          #sequential_update: false
+          sequential_update: true
           targets: ["re:model.layers.\\\d*$"]
     """
 
     sparseml.transformers.oneshot(
-        model=model_path,
+        model=model,
         dataset=ds,
         recipe=recipe,
         output_dir=compress_model_path,
@@ -468,7 +478,7 @@ def gpu_model_optimization(predecing_task:object, model_path:str,
 def sparseml_pipeline(
     model_name:str="TinyLlama/TinyLlama-1.1B-Chat-v1.0",
     inference_target:str='CPU',  # CPU or GPU
-    download_option:str='HF',   # HF or S3
+    download_option:str='HF',   # HF or S3 or PVC if already there
     shared_volume:str='models-shared',
     sparse:bool=True,
     sparsity_ratio:float=0.5,
