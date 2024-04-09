@@ -23,6 +23,7 @@ metadata:
       LLMs with SparseML", "inputs": [{"default": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
       "name": "model_name", "optional": true, "type": "String"}, {"default": "CPU",
       "name": "inference_target", "optional": true, "type": "String"}, {"default":
+      "HF", "name": "download_option", "optional": true, "type": "String"}, {"default":
       "models-shared", "name": "shared_volume", "optional": true, "type": "String"},
       {"default": "True", "name": "sparse", "optional": true, "type": "Boolean"},
       {"default": "0.5", "name": "sparsity_ratio", "optional": true, "type": "Float"},
@@ -38,6 +39,8 @@ metadata:
     pipelines.kubeflow.org/generation: ''
 spec:
   params:
+  - name: download_option
+    value: HF
   - name: eval
     value: "False"
   - name: eval_batch_size
@@ -62,6 +65,8 @@ spec:
     value: '0.5'
   pipelineSpec:
     params:
+    - name: download_option
+      default: HF
     - name: eval
       default: "False"
     - name: eval_batch_size
@@ -87,6 +92,8 @@ spec:
     tasks:
     - name: download-model
       params:
+      - name: download_option
+        value: $(params.download_option)
       - name: model_name
         value: $(params.model_name)
       - name: shared_volume
@@ -99,12 +106,15 @@ spec:
           - $(inputs.params.model_name)
           - --destination-path
           - /mnt/models/llm
+          - --download-option
+          - $(inputs.params.download_option)
           command:
           - sh
           - -c
           - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
-            'huggingface-hub' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install
-            --quiet --no-warn-script-location 'huggingface-hub' --user) && "$0" "$@"
+            'huggingface-hub' 'boto3' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m
+            pip install --quiet --no-warn-script-location 'huggingface-hub' 'boto3'
+            --user) && "$0" "$@"
           - sh
           - -ec
           - |
@@ -112,33 +122,96 @@ spec:
             printf "%s" "$0" > "$program_path"
             python3 -u "$program_path" "$@"
           - |
-            def download_model(model_name, destination_path):
-                import subprocess
+            def download_model(model_name, destination_path,
+                               download_option):
+                if download_option == "HF":
+                    import subprocess
+                    print('Starting downloading the model from HF')
+                    # Execute the huggingface_hub-cli command
+                    result = subprocess.run(["huggingface-cli", "download", model_name,
+                                            "--local-dir", destination_path,
+                                            "--local-dir-use-symlinks", "False"],
+                                            capture_output=True, text=True)
+                    # Check for errors or output
+                    if result.returncode == 0:
+                        print("Model downloaded successfully from HF.")
+                    else:
+                        print("Error downloading model:")
+                        print(result.stderr)
 
-                # Execute the huggingface_hub-cli command
-                result = subprocess.run(["huggingface-cli", "download", model_name,
-                                         "--local-dir", destination_path,
-                                         "--local-dir-use-symlinks", "False"], capture_output=True, text=True)
+                elif download_option == "S3":
+                    import os
+                    import errno
+                    from boto3 import client
 
-                # Check for errors or output
-                if result.returncode == 0:
-                    print("Model downloaded successfully.")
-                else:
-                    print("Error downloading model:")
-                    print(result.stderr)
+                    print('Starting downloading the model from S3')
+
+                    s3_endpoint_url = os.environ["s3_host"]
+                    s3_access_key = os.environ["s3_access_key"]
+                    s3_secret_key = os.environ["s3_secret_access_key"]
+                    s3_bucket_name = os.environ["s3_bucket"]
+
+                    s3_client = client(
+                        's3', endpoint_url=s3_endpoint_url, aws_access_key_id=s3_access_key,
+                        aws_secret_access_key=s3_secret_key, verify=False
+                    )
+
+                    # list all objects in the folder
+                    objects = s3_client.list_objects(Bucket=s3_bucket_name, Prefix=model_name)
+
+                    # download each object in the folder
+                    for object in objects['Contents']:
+                        file_name = object['Key']
+                        local_file_name = os.path.join(destination_path, file_name.replace(model_name, '')[1:])
+                        if not os.path.exists(os.path.dirname(local_file_name)):
+                            try:
+                                os.makedirs(os.path.dirname(local_file_name))
+                            except OSError as exc: # Guard against race condition
+                                if exc.errno != errno.EEXIST:
+                                    print("Error downloading model")
+                                    raise
+                        print('Download file to')
+                        print(file_name)
+                        print(local_file_name)
+                        s3_client.download_file(s3_bucket_name, file_name, local_file_name)
+
+                    print('Model downloaded successfully from S3.')
 
             import argparse
             _parser = argparse.ArgumentParser(prog='Download model', description='')
             _parser.add_argument("--model-name", dest="model_name", type=str, required=True, default=argparse.SUPPRESS)
             _parser.add_argument("--destination-path", dest="destination_path", type=str, required=True, default=argparse.SUPPRESS)
+            _parser.add_argument("--download-option", dest="download_option", type=str, required=True, default=argparse.SUPPRESS)
             _parsed_args = vars(_parser.parse_args())
 
             _outputs = download_model(**_parsed_args)
+          env:
+          - name: s3_access_key
+            valueFrom:
+              secretKeyRef:
+                key: AWS_ACCESS_KEY_ID
+                name: aws-connection-models
+          - name: s3_secret_access_key
+            valueFrom:
+              secretKeyRef:
+                key: AWS_SECRET_ACCESS_KEY
+                name: aws-connection-models
+          - name: s3_host
+            valueFrom:
+              secretKeyRef:
+                key: AWS_S3_ENDPOINT
+                name: aws-connection-models
+          - name: s3_bucket
+            valueFrom:
+              secretKeyRef:
+                key: AWS_S3_BUCKET
+                name: aws-connection-models
           image: registry.access.redhat.com/ubi9/python-311
           volumeMounts:
           - mountPath: /mnt/models
             name: models-shared
         params:
+        - name: download_option
         - name: model_name
         - name: shared_volume
         volumes:
@@ -150,7 +223,7 @@ spec:
             pipelines.kubeflow.org/cache_enabled: "true"
           annotations:
             pipelines.kubeflow.org/component_spec_digest: '{"name": "Download model",
-              "outputs": [], "version": "Download model@sha256=3a6be80cdd1a11b64952aec033562c09b52aeeb476c1baab2f6ba12800bcd248"}'
+              "outputs": [], "version": "Download model@sha256=eedeeda3d951f67a8468840eb1fff6a408c3f60fc4eb74347c0fd3ee7f7c5326"}'
     - name: sparse-model
       params:
       - name: shared_volume
@@ -182,7 +255,8 @@ spec:
             printf "%s" "$0" > "$program_path"
             python3 -u "$program_path" "$@"
           - |
-            def sparse_model(model_path, compress_model_path, ds, sparsity_ratio):
+            def sparse_model(model_path, compress_model_path, ds,
+                             sparsity_ratio):
                 import sparseml.transformers
 
                 recipe = f"""
@@ -231,7 +305,7 @@ spec:
             pipelines.kubeflow.org/cache_enabled: "true"
           annotations:
             pipelines.kubeflow.org/component_spec_digest: '{"name": "Sparse model",
-              "outputs": [], "version": "Sparse model@sha256=bc38aca24f88e85346cb59a4b9a69c06f31bc9d2c3a735e057555c09dc67d279"}'
+              "outputs": [], "version": "Sparse model@sha256=98a3c6f5bb77d477b038e0358ff6d8ff3908c8d4ace611bb9077d38ab768ae70"}'
       when:
       - input: $(tasks.condition-1.results.outcome)
         operator: in
@@ -561,8 +635,6 @@ spec:
                 from boto3 import client
 
                 print('Starting results upload.')
-                print(os.environ)
-
                 s3_endpoint_url = os.environ["s3_host"]
                 s3_access_key = os.environ["s3_access_key"]
                 s3_secret_key = os.environ["s3_secret_access_key"]
@@ -572,8 +644,8 @@ spec:
                       f'to S3 storage at {s3_endpoint_url}')
 
                 s3_client = client(
-                    's3', endpoint_url=s3_endpoint_url,
-                    aws_access_key_id=s3_access_key, aws_secret_access_key=s3_secret_key, verify=False
+                    's3', endpoint_url=s3_endpoint_url, aws_access_key_id=s3_access_key,
+                    aws_secret_access_key=s3_secret_key, verify=False
                 )
 
                 # Walk through the local folder and upload files
@@ -631,7 +703,7 @@ spec:
             pipelines.kubeflow.org/cache_enabled: "true"
           annotations:
             pipelines.kubeflow.org/component_spec_digest: '{"name": "Upload model",
-              "outputs": [], "version": "Upload model@sha256=36810658761d0686bc712536b3f9103a34eb528b22005e405f517cd9a1782de1"}'
+              "outputs": [], "version": "Upload model@sha256=9f0185c6243513eba3949cfda601768fc44d79aad60d55b4ba40862ccca42e77"}'
       when:
       - input: $(tasks.condition-5.results.outcome)
         operator: in
@@ -846,8 +918,6 @@ spec:
                 from boto3 import client
 
                 print('Starting results upload.')
-                print(os.environ)
-
                 s3_endpoint_url = os.environ["s3_host"]
                 s3_access_key = os.environ["s3_access_key"]
                 s3_secret_key = os.environ["s3_secret_access_key"]
@@ -857,8 +927,8 @@ spec:
                       f'to S3 storage at {s3_endpoint_url}')
 
                 s3_client = client(
-                    's3', endpoint_url=s3_endpoint_url,
-                    aws_access_key_id=s3_access_key, aws_secret_access_key=s3_secret_key, verify=False
+                    's3', endpoint_url=s3_endpoint_url, aws_access_key_id=s3_access_key,
+                    aws_secret_access_key=s3_secret_key, verify=False
                 )
 
                 # Walk through the local folder and upload files
@@ -916,7 +986,7 @@ spec:
             pipelines.kubeflow.org/cache_enabled: "true"
           annotations:
             pipelines.kubeflow.org/component_spec_digest: '{"name": "Upload model",
-              "outputs": [], "version": "Upload model@sha256=36810658761d0686bc712536b3f9103a34eb528b22005e405f517cd9a1782de1"}'
+              "outputs": [], "version": "Upload model@sha256=9f0185c6243513eba3949cfda601768fc44d79aad60d55b4ba40862ccca42e77"}'
       when:
       - input: $(tasks.condition-9.results.outcome)
         operator: in
@@ -971,7 +1041,8 @@ spec:
                 NUM_EXAMPLES = 512
 
                 def preprocess(example):
-                    return {"text": tokenizer.apply_chat_template(example["messages"], tokenize=False)}
+                    return {"text": tokenizer.apply_chat_template(example["messages"],
+                                                                  tokenize=False)}
 
                 print("Loading the dataset and tokenizers")
                 dataset = load_dataset(ds, split="train_sft")
@@ -981,7 +1052,8 @@ spec:
 
                 examples = [
                     tokenizer(
-                        example["text"], padding=False, max_length=MAX_SEQ_LEN, truncation=True,
+                        example["text"], padding=False, max_length=MAX_SEQ_LEN,
+                        truncation=True,
                     ) for example in ds
                 ]
 
@@ -1049,7 +1121,7 @@ spec:
             pipelines.kubeflow.org/cache_enabled: "true"
           annotations:
             pipelines.kubeflow.org/component_spec_digest: '{"name": "Quantize gpu
-              model", "outputs": [], "version": "Quantize gpu model@sha256=8642680ac34536cb064512c4e35d94d8fce97158451b5801ec791b8a63d89ed1"}'
+              model", "outputs": [], "version": "Quantize gpu model@sha256=dc6445aa31ba89ff7d4a3c1e6b23f3d7b18df9ed11a72c615e4e9d4ce9fc455d"}'
       when:
       - input: $(tasks.condition-11.results.outcome)
         operator: in
@@ -1200,8 +1272,6 @@ spec:
                 from boto3 import client
 
                 print('Starting results upload.')
-                print(os.environ)
-
                 s3_endpoint_url = os.environ["s3_host"]
                 s3_access_key = os.environ["s3_access_key"]
                 s3_secret_key = os.environ["s3_secret_access_key"]
@@ -1211,8 +1281,8 @@ spec:
                       f'to S3 storage at {s3_endpoint_url}')
 
                 s3_client = client(
-                    's3', endpoint_url=s3_endpoint_url,
-                    aws_access_key_id=s3_access_key, aws_secret_access_key=s3_secret_key, verify=False
+                    's3', endpoint_url=s3_endpoint_url, aws_access_key_id=s3_access_key,
+                    aws_secret_access_key=s3_secret_key, verify=False
                 )
 
                 # Walk through the local folder and upload files
@@ -1270,7 +1340,7 @@ spec:
             pipelines.kubeflow.org/cache_enabled: "true"
           annotations:
             pipelines.kubeflow.org/component_spec_digest: '{"name": "Upload model",
-              "outputs": [], "version": "Upload model@sha256=36810658761d0686bc712536b3f9103a34eb528b22005e405f517cd9a1782de1"}'
+              "outputs": [], "version": "Upload model@sha256=9f0185c6243513eba3949cfda601768fc44d79aad60d55b4ba40862ccca42e77"}'
       when:
       - input: $(tasks.condition-13.results.outcome)
         operator: in
@@ -1421,8 +1491,6 @@ spec:
                 from boto3 import client
 
                 print('Starting results upload.')
-                print(os.environ)
-
                 s3_endpoint_url = os.environ["s3_host"]
                 s3_access_key = os.environ["s3_access_key"]
                 s3_secret_key = os.environ["s3_secret_access_key"]
@@ -1432,8 +1500,8 @@ spec:
                       f'to S3 storage at {s3_endpoint_url}')
 
                 s3_client = client(
-                    's3', endpoint_url=s3_endpoint_url,
-                    aws_access_key_id=s3_access_key, aws_secret_access_key=s3_secret_key, verify=False
+                    's3', endpoint_url=s3_endpoint_url, aws_access_key_id=s3_access_key,
+                    aws_secret_access_key=s3_secret_key, verify=False
                 )
 
                 # Walk through the local folder and upload files
@@ -1491,7 +1559,7 @@ spec:
             pipelines.kubeflow.org/cache_enabled: "true"
           annotations:
             pipelines.kubeflow.org/component_spec_digest: '{"name": "Upload model",
-              "outputs": [], "version": "Upload model@sha256=36810658761d0686bc712536b3f9103a34eb528b22005e405f517cd9a1782de1"}'
+              "outputs": [], "version": "Upload model@sha256=9f0185c6243513eba3949cfda601768fc44d79aad60d55b4ba40862ccca42e77"}'
       when:
       - input: $(tasks.condition-17.results.outcome)
         operator: in
@@ -1813,8 +1881,6 @@ spec:
                 from boto3 import client
 
                 print('Starting results upload.')
-                print(os.environ)
-
                 s3_endpoint_url = os.environ["s3_host"]
                 s3_access_key = os.environ["s3_access_key"]
                 s3_secret_key = os.environ["s3_secret_access_key"]
@@ -1824,8 +1890,8 @@ spec:
                       f'to S3 storage at {s3_endpoint_url}')
 
                 s3_client = client(
-                    's3', endpoint_url=s3_endpoint_url,
-                    aws_access_key_id=s3_access_key, aws_secret_access_key=s3_secret_key, verify=False
+                    's3', endpoint_url=s3_endpoint_url, aws_access_key_id=s3_access_key,
+                    aws_secret_access_key=s3_secret_key, verify=False
                 )
 
                 # Walk through the local folder and upload files
@@ -1883,7 +1949,7 @@ spec:
             pipelines.kubeflow.org/cache_enabled: "true"
           annotations:
             pipelines.kubeflow.org/component_spec_digest: '{"name": "Upload model",
-              "outputs": [], "version": "Upload model@sha256=36810658761d0686bc712536b3f9103a34eb528b22005e405f517cd9a1782de1"}'
+              "outputs": [], "version": "Upload model@sha256=9f0185c6243513eba3949cfda601768fc44d79aad60d55b4ba40862ccca42e77"}'
       when:
       - input: $(tasks.condition-22.results.outcome)
         operator: in
@@ -2086,8 +2152,6 @@ spec:
                 from boto3 import client
 
                 print('Starting results upload.')
-                print(os.environ)
-
                 s3_endpoint_url = os.environ["s3_host"]
                 s3_access_key = os.environ["s3_access_key"]
                 s3_secret_key = os.environ["s3_secret_access_key"]
@@ -2097,8 +2161,8 @@ spec:
                       f'to S3 storage at {s3_endpoint_url}')
 
                 s3_client = client(
-                    's3', endpoint_url=s3_endpoint_url,
-                    aws_access_key_id=s3_access_key, aws_secret_access_key=s3_secret_key, verify=False
+                    's3', endpoint_url=s3_endpoint_url, aws_access_key_id=s3_access_key,
+                    aws_secret_access_key=s3_secret_key, verify=False
                 )
 
                 # Walk through the local folder and upload files
@@ -2156,7 +2220,7 @@ spec:
             pipelines.kubeflow.org/cache_enabled: "true"
           annotations:
             pipelines.kubeflow.org/component_spec_digest: '{"name": "Upload model",
-              "outputs": [], "version": "Upload model@sha256=36810658761d0686bc712536b3f9103a34eb528b22005e405f517cd9a1782de1"}'
+              "outputs": [], "version": "Upload model@sha256=9f0185c6243513eba3949cfda601768fc44d79aad60d55b4ba40862ccca42e77"}'
       when:
       - input: $(tasks.condition-26.results.outcome)
         operator: in
@@ -2207,7 +2271,8 @@ spec:
                 NUM_EXAMPLES = 512
 
                 def preprocess(example):
-                    return {"text": tokenizer.apply_chat_template(example["messages"], tokenize=False)}
+                    return {"text": tokenizer.apply_chat_template(example["messages"],
+                                                                  tokenize=False)}
 
                 print("Loading the dataset and tokenizers")
                 dataset = load_dataset(ds, split="train_sft")
@@ -2217,7 +2282,8 @@ spec:
 
                 examples = [
                     tokenizer(
-                        example["text"], padding=False, max_length=MAX_SEQ_LEN, truncation=True,
+                        example["text"], padding=False, max_length=MAX_SEQ_LEN,
+                        truncation=True,
                     ) for example in ds
                 ]
 
@@ -2285,7 +2351,7 @@ spec:
             pipelines.kubeflow.org/cache_enabled: "true"
           annotations:
             pipelines.kubeflow.org/component_spec_digest: '{"name": "Quantize gpu
-              model", "outputs": [], "version": "Quantize gpu model@sha256=8642680ac34536cb064512c4e35d94d8fce97158451b5801ec791b8a63d89ed1"}'
+              model", "outputs": [], "version": "Quantize gpu model@sha256=dc6445aa31ba89ff7d4a3c1e6b23f3d7b18df9ed11a72c615e4e9d4ce9fc455d"}'
       when:
       - input: $(tasks.condition-28.results.outcome)
         operator: in
@@ -2428,8 +2494,6 @@ spec:
                 from boto3 import client
 
                 print('Starting results upload.')
-                print(os.environ)
-
                 s3_endpoint_url = os.environ["s3_host"]
                 s3_access_key = os.environ["s3_access_key"]
                 s3_secret_key = os.environ["s3_secret_access_key"]
@@ -2439,8 +2503,8 @@ spec:
                       f'to S3 storage at {s3_endpoint_url}')
 
                 s3_client = client(
-                    's3', endpoint_url=s3_endpoint_url,
-                    aws_access_key_id=s3_access_key, aws_secret_access_key=s3_secret_key, verify=False
+                    's3', endpoint_url=s3_endpoint_url, aws_access_key_id=s3_access_key,
+                    aws_secret_access_key=s3_secret_key, verify=False
                 )
 
                 # Walk through the local folder and upload files
@@ -2498,7 +2562,7 @@ spec:
             pipelines.kubeflow.org/cache_enabled: "true"
           annotations:
             pipelines.kubeflow.org/component_spec_digest: '{"name": "Upload model",
-              "outputs": [], "version": "Upload model@sha256=36810658761d0686bc712536b3f9103a34eb528b22005e405f517cd9a1782de1"}'
+              "outputs": [], "version": "Upload model@sha256=9f0185c6243513eba3949cfda601768fc44d79aad60d55b4ba40862ccca42e77"}'
       when:
       - input: $(tasks.condition-30.results.outcome)
         operator: in
@@ -2641,8 +2705,6 @@ spec:
                 from boto3 import client
 
                 print('Starting results upload.')
-                print(os.environ)
-
                 s3_endpoint_url = os.environ["s3_host"]
                 s3_access_key = os.environ["s3_access_key"]
                 s3_secret_key = os.environ["s3_secret_access_key"]
@@ -2652,8 +2714,8 @@ spec:
                       f'to S3 storage at {s3_endpoint_url}')
 
                 s3_client = client(
-                    's3', endpoint_url=s3_endpoint_url,
-                    aws_access_key_id=s3_access_key, aws_secret_access_key=s3_secret_key, verify=False
+                    's3', endpoint_url=s3_endpoint_url, aws_access_key_id=s3_access_key,
+                    aws_secret_access_key=s3_secret_key, verify=False
                 )
 
                 # Walk through the local folder and upload files
@@ -2711,7 +2773,7 @@ spec:
             pipelines.kubeflow.org/cache_enabled: "true"
           annotations:
             pipelines.kubeflow.org/component_spec_digest: '{"name": "Upload model",
-              "outputs": [], "version": "Upload model@sha256=36810658761d0686bc712536b3f9103a34eb528b22005e405f517cd9a1782de1"}'
+              "outputs": [], "version": "Upload model@sha256=9f0185c6243513eba3949cfda601768fc44d79aad60d55b4ba40862ccca42e77"}'
       when:
       - input: $(tasks.condition-34.results.outcome)
         operator: in
