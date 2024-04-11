@@ -11,6 +11,7 @@ SPARSE_MODEL_DIR = BASE_DIR + "sparse-llm"
 QUANT_MODEL_DIR = BASE_DIR + "quant-llm"
 EXPORTED_MODEL_DIR = BASE_DIR + "exported"
 
+
 def download_model(model_name: str, destination_path: str,
                    download_option: str):
     if download_option == "HF":
@@ -67,7 +68,7 @@ def download_model(model_name: str, destination_path: str,
         print('Model should be already on the volumen.')
 
 def sparse_model(model_path:str, compress_model_path: str, ds: str,
-                 sparsity_ratio: float):
+                 sparsity_ratio: float, sparsity_targets: str):
     import sparseml.transformers
     import torch
 
@@ -86,7 +87,7 @@ def sparse_model(model_path:str, compress_model_path: str, ds: str,
           sparsity: {sparsity_ratio}
           #sequential_update: false
           sequential_update: true
-          targets: ["re:model.layers.\\\d*$"]
+          targets: {sparsity_targets}
     """
 
     sparseml.transformers.oneshot(
@@ -164,6 +165,7 @@ def quantize_gpu_model(model_path:str, compress_model_path: str, ds: str):
 
     print("Loading the dataset and tokenizers")
     dataset = load_dataset(ds, split="train_sft")
+    #dataset = load_dataset(ds, split="train")
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     ds = dataset.shuffle().select(range(NUM_EXAMPLES))
     ds = ds.map(preprocess)
@@ -286,15 +288,15 @@ download_op = comp.create_component_from_func(download_model,
                                               packages_to_install=["huggingface-hub", "boto3"],
                                               base_image='registry.access.redhat.com/ubi9/python-311')
 sparse_op = comp.create_component_from_func(sparse_model,
-                                            packages_to_install=["datasets"],
+                                            packages_to_install=["datasets", "sentencepiece"],
                                             base_image='quay.io/ltomasbo/neural-magic:sparseml')
 #                                            base_image='quay.io/ltomasbo/sparseml')
 quant_cpu_op = comp.create_component_from_func(quantize_cpu_model,
-                                            packages_to_install=["datasets"],
+                                            packages_to_install=["datasets", "sentencepiece"],
                                             base_image='quay.io/ltomasbo/neural-magic:sparseml')
 #                                            base_image='quay.io/ltomasbo/sparseml')
 quant_gpu_op = comp.create_component_from_func(quantize_gpu_model,
-                                            packages_to_install=["datasets", "auto-gptq==0.7.1", "torch==2.2.1"],
+                                            packages_to_install=["datasets", "auto-gptq==0.7.1", "torch==2.2.1", "sentencepiece"],
                                             base_image='registry.access.redhat.com/ubi9/python-311')
 export_op = comp.create_component_from_func(export_model,
                                             packages_to_install=[],
@@ -326,8 +328,8 @@ def cpu_model_optimization(predecing_task:object, model_path:str,
         quant_llm.add_node_selector_constraint(
             label_name='nvidia.com/gpu.present', value='true')
         quant_llm.add_toleration(gpu_toleration)
-        quant_llm.add_resource_request('nvidia.com/gpu', "1")
-        quant_llm.add_resource_limit('nvidia.com/gpu', "1")
+        quant_llm.add_resource_request('nvidia.com/gpu', "2")
+        quant_llm.add_resource_limit('nvidia.com/gpu', "2")
         quant_llm.after(predecing_task)
 
         with dsl.Condition(eval == True):
@@ -407,12 +409,13 @@ def gpu_model_optimization(predecing_task:object, model_path:str,
         quant_llm = quant_gpu_op(model_path=model_path,
                                  compress_model_path=QUANT_MODEL_DIR,
                                  ds="HuggingFaceH4/ultrachat_200k")
+                                 #ds="garage-bAInd/Open-Platypus")
         quant_llm.add_pvolumes({"/mnt/models": vol})
         quant_llm.add_node_selector_constraint(
             label_name='nvidia.com/gpu.present', value='true')
         quant_llm.add_toleration(gpu_toleration)
-        quant_llm.add_resource_request('nvidia.com/gpu', "1")
-        quant_llm.add_resource_limit('nvidia.com/gpu', "1")
+        quant_llm.add_resource_request('nvidia.com/gpu', "2")
+        quant_llm.add_resource_limit('nvidia.com/gpu', "2")
         quant_llm.after(predecing_task)
 
         with dsl.Condition(eval == True):
@@ -482,6 +485,7 @@ def sparseml_pipeline(
     shared_volume:str='models-shared',
     sparse:bool=True,
     sparsity_ratio:float=0.5,
+    sparsity_targets:str='["re:model.layers.\d*$"]',
     quantize:bool=True,
     eval:bool=False,
     eval_task:str="hellaswag",
@@ -489,6 +493,14 @@ def sparseml_pipeline(
     save_model:bool=True,
     save_folder_name:str="optimized-1"
 ):
+        
+    ONE_HOUR_SEC = 60 * 60
+    ONE_DAY_SEC = ONE_HOUR_SEC * 24
+    ONE_WEEK_SEC = ONE_DAY_SEC * 7
+
+    # Configure the pipeline level to one week (in seconds)
+    dsl.get_pipeline_conf().set_timeout(ONE_WEEK_SEC)
+
     print("Params", model_name, inference_target, sparse, sparsity_ratio,
           quantize, eval, eval_task, eval_batch_size, save_model)
     vol = V1Volume(
@@ -522,13 +534,14 @@ def sparseml_pipeline(
         sparse_llm = sparse_op(model_path=MODEL_DIR,
                                compress_model_path=SPARSE_MODEL_DIR,
                                ds="open_platypus",
-                               sparsity_ratio=sparsity_ratio)
+                               sparsity_ratio=sparsity_ratio,
+                               sparsity_targets=sparsity_targets)
         sparse_llm.add_pvolumes({"/mnt/models": vol})
         sparse_llm.add_node_selector_constraint(
             label_name='nvidia.com/gpu.present', value='true')
         sparse_llm.add_toleration(gpu_toleration)
-        sparse_llm.add_resource_request('nvidia.com/gpu', "1")
-        sparse_llm.add_resource_limit('nvidia.com/gpu', "1")
+        sparse_llm.add_resource_request('nvidia.com/gpu', "4")
+        sparse_llm.add_resource_limit('nvidia.com/gpu', "4")
         sparse_llm.after(download_llm)
 
         with dsl.Condition(inference_target == 'CPU'):

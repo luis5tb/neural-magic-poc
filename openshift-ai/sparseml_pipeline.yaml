@@ -27,13 +27,14 @@ metadata:
       "models-shared", "name": "shared_volume", "optional": true, "type": "String"},
       {"default": "True", "name": "sparse", "optional": true, "type": "Boolean"},
       {"default": "0.5", "name": "sparsity_ratio", "optional": true, "type": "Float"},
-      {"default": "True", "name": "quantize", "optional": true, "type": "Boolean"},
-      {"default": "False", "name": "eval", "optional": true, "type": "Boolean"}, {"default":
-      "hellaswag", "name": "eval_task", "optional": true, "type": "String"}, {"default":
-      "64", "name": "eval_batch_size", "optional": true, "type": "String"}, {"default":
-      "True", "name": "save_model", "optional": true, "type": "Boolean"}, {"default":
-      "optimized-1", "name": "save_folder_name", "optional": true, "type": "String"}],
-      "name": "LLM Pruning Pipeline"}'
+      {"default": "[\"re:model.layers.\\d*$\"]", "name": "sparsity_targets", "optional":
+      true, "type": "String"}, {"default": "True", "name": "quantize", "optional":
+      true, "type": "Boolean"}, {"default": "False", "name": "eval", "optional": true,
+      "type": "Boolean"}, {"default": "hellaswag", "name": "eval_task", "optional":
+      true, "type": "String"}, {"default": "64", "name": "eval_batch_size", "optional":
+      true, "type": "String"}, {"default": "True", "name": "save_model", "optional":
+      true, "type": "Boolean"}, {"default": "optimized-1", "name": "save_folder_name",
+      "optional": true, "type": "String"}], "name": "LLM Pruning Pipeline"}'
   labels:
     pipelines.kubeflow.org/pipelinename: ''
     pipelines.kubeflow.org/generation: ''
@@ -63,6 +64,8 @@ spec:
     value: "True"
   - name: sparsity_ratio
     value: '0.5'
+  - name: sparsity_targets
+    value: '["re:model.layers.\d*$"]'
   pipelineSpec:
     params:
     - name: download_option
@@ -89,6 +92,8 @@ spec:
       default: "True"
     - name: sparsity_ratio
       default: '0.5'
+    - name: sparsity_targets
+      default: '["re:model.layers.\d*$"]'
     tasks:
     - name: download-model
       params:
@@ -170,9 +175,6 @@ spec:
                                 if exc.errno != errno.EEXIST:
                                     print("Error downloading model")
                                     raise
-                        print('Download file to')
-                        print(file_name)
-                        print(local_file_name)
                         s3_client.download_file(s3_bucket_name, file_name, local_file_name)
 
                     print('Model downloaded successfully from S3.')
@@ -226,13 +228,15 @@ spec:
             pipelines.kubeflow.org/cache_enabled: "true"
           annotations:
             pipelines.kubeflow.org/component_spec_digest: '{"name": "Download model",
-              "outputs": [], "version": "Download model@sha256=b7fbdb69001d09507ffd79158bada03ecad235fad1143f8b338b2bf7928c542b"}'
+              "outputs": [], "version": "Download model@sha256=e1d9988e3e7295a0960c7cfef6806a484c89916683bf57468ef623a0b8355892"}'
     - name: sparse-model
       params:
       - name: shared_volume
         value: $(params.shared_volume)
       - name: sparsity_ratio
         value: $(params.sparsity_ratio)
+      - name: sparsity_targets
+        value: $(params.sparsity_targets)
       taskSpec:
         steps:
         - name: main
@@ -245,12 +249,15 @@ spec:
           - open_platypus
           - --sparsity-ratio
           - $(inputs.params.sparsity_ratio)
+          - --sparsity-targets
+          - $(inputs.params.sparsity_targets)
           command:
           - sh
           - -c
           - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
-            'datasets' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet
-            --no-warn-script-location 'datasets' --user) && "$0" "$@"
+            'datasets' 'sentencepiece' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3
+            -m pip install --quiet --no-warn-script-location 'datasets' 'sentencepiece'
+            --user) && "$0" "$@"
           - sh
           - -ec
           - |
@@ -259,20 +266,30 @@ spec:
             python3 -u "$program_path" "$@"
           - |
             def sparse_model(model_path, compress_model_path, ds,
-                             sparsity_ratio):
+                             sparsity_ratio, sparsity_targets):
                 import sparseml.transformers
+                import torch
+
+                #set the data type of the model to bfloat16 and device_map="auto" which
+                # will place the model on all the gpus available in the system
+                model = sparseml.transformers.SparseAutoModelForCausalLM.from_pretrained(
+                    model_path,
+                    torch_dtype=torch.bfloat16,
+                    device_map="auto"
+                )
 
                 recipe = f"""
                 test_stage:
                   obcq_modifiers:
                     SparseGPTModifier:
                       sparsity: {sparsity_ratio}
+                      #sequential_update: false
                       sequential_update: true
-                      targets: ["re:model.layers.\\\d*$"]
+                      targets: {sparsity_targets}
                 """
 
                 sparseml.transformers.oneshot(
-                    model=model_path,
+                    model=model,
                     dataset=ds,
                     recipe=recipe,
                     output_dir=compress_model_path,
@@ -284,21 +301,23 @@ spec:
             _parser.add_argument("--compress-model-path", dest="compress_model_path", type=str, required=True, default=argparse.SUPPRESS)
             _parser.add_argument("--ds", dest="ds", type=str, required=True, default=argparse.SUPPRESS)
             _parser.add_argument("--sparsity-ratio", dest="sparsity_ratio", type=float, required=True, default=argparse.SUPPRESS)
+            _parser.add_argument("--sparsity-targets", dest="sparsity_targets", type=str, required=True, default=argparse.SUPPRESS)
             _parsed_args = vars(_parser.parse_args())
 
             _outputs = sparse_model(**_parsed_args)
           image: quay.io/ltomasbo/neural-magic:sparseml
           resources:
             limits:
-              nvidia.com/gpu: '1'
+              nvidia.com/gpu: '4'
             requests:
-              nvidia.com/gpu: '1'
+              nvidia.com/gpu: '4'
           volumeMounts:
           - mountPath: /mnt/models
             name: models-shared
         params:
         - name: shared_volume
         - name: sparsity_ratio
+        - name: sparsity_targets
         volumes:
         - name: models-shared
           persistentVolumeClaim:
@@ -308,7 +327,7 @@ spec:
             pipelines.kubeflow.org/cache_enabled: "true"
           annotations:
             pipelines.kubeflow.org/component_spec_digest: '{"name": "Sparse model",
-              "outputs": [], "version": "Sparse model@sha256=924ebd9aa551e8f122e4ff6e982a7d38ddca97ea9e006a1ae3af8daf7dce14c1"}'
+              "outputs": [], "version": "Sparse model@sha256=9b149eb5c9c18c836520b8d303594102195e5ba828f0988addab71b28b426ec5"}'
       when:
       - input: $(tasks.condition-1.results.outcome)
         operator: in
@@ -316,6 +335,7 @@ spec:
         - "true"
       runAfter:
       - download-model
+      timeout: 5h
     - name: quantize-cpu-model
       params:
       - name: shared_volume
@@ -334,8 +354,9 @@ spec:
           - sh
           - -c
           - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
-            'datasets' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet
-            --no-warn-script-location 'datasets' --user) && "$0" "$@"
+            'datasets' 'sentencepiece' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3
+            -m pip install --quiet --no-warn-script-location 'datasets' 'sentencepiece'
+            --user) && "$0" "$@"
           - sh
           - -ec
           - |
@@ -406,9 +427,9 @@ spec:
           image: quay.io/ltomasbo/neural-magic:sparseml
           resources:
             limits:
-              nvidia.com/gpu: '1'
+              nvidia.com/gpu: '2'
             requests:
-              nvidia.com/gpu: '1'
+              nvidia.com/gpu: '2'
           volumeMounts:
           - mountPath: /mnt/models
             name: models-shared
@@ -423,7 +444,7 @@ spec:
             pipelines.kubeflow.org/cache_enabled: "true"
           annotations:
             pipelines.kubeflow.org/component_spec_digest: '{"name": "Quantize cpu
-              model", "outputs": [], "version": "Quantize cpu model@sha256=52864b80d9ab7005b2448f87e67e78bc8a647853403c1af64c5d26b45b70e546"}'
+              model", "outputs": [], "version": "Quantize cpu model@sha256=9585aac60cdd2ff6884077f2a87b137fa37e22307cc6073f484a01dca23ded3e"}'
       when:
       - input: $(tasks.condition-3.results.outcome)
         operator: in
@@ -435,6 +456,7 @@ spec:
         - "true"
       runAfter:
       - sparse-model
+      timeout: 5h
     - name: eval-model
       params:
       - name: eval_batch_size
@@ -542,6 +564,7 @@ spec:
         - "true"
       runAfter:
       - quantize-cpu-model
+      timeout: 5h
     - name: export-model
       params:
       - name: shared_volume
@@ -606,6 +629,7 @@ spec:
         - "true"
       runAfter:
       - quantize-cpu-model
+      timeout: 5h
     - name: upload-model
       params:
       - name: save_folder_name
@@ -825,6 +849,7 @@ spec:
         - "true"
       runAfter:
       - sparse-model
+      timeout: 5h
     - name: export-model-2
       params:
       - name: shared_volume
@@ -889,6 +914,7 @@ spec:
         - "true"
       runAfter:
       - sparse-model
+      timeout: 5h
     - name: upload-model-2
       params:
       - name: save_folder_name
@@ -1023,9 +1049,10 @@ spec:
           - sh
           - -c
           - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
-            'datasets' 'auto-gptq==0.7.1' 'torch==2.2.1' || PIP_DISABLE_PIP_VERSION_CHECK=1
-            python3 -m pip install --quiet --no-warn-script-location 'datasets' 'auto-gptq==0.7.1'
-            'torch==2.2.1' --user) && "$0" "$@"
+            'datasets' 'auto-gptq==0.7.1' 'torch==2.2.1' 'sentencepiece' 'protobuf'
+            || PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
+            'datasets' 'auto-gptq==0.7.1' 'torch==2.2.1' 'sentencepiece' 'protobuf'
+            --user) && "$0" "$@"
           - sh
           - -ec
           - |
@@ -1049,6 +1076,7 @@ spec:
 
                 print("Loading the dataset and tokenizers")
                 dataset = load_dataset(ds, split="train_sft")
+                #dataset = load_dataset(ds, split="train")
                 tokenizer = AutoTokenizer.from_pretrained(model_path)
                 ds = dataset.shuffle().select(range(NUM_EXAMPLES))
                 ds = ds.map(preprocess)
@@ -1107,9 +1135,9 @@ spec:
           image: registry.access.redhat.com/ubi9/python-311
           resources:
             limits:
-              nvidia.com/gpu: '1'
+              nvidia.com/gpu: '2'
             requests:
-              nvidia.com/gpu: '1'
+              nvidia.com/gpu: '2'
           volumeMounts:
           - mountPath: /mnt/models
             name: models-shared
@@ -1124,7 +1152,7 @@ spec:
             pipelines.kubeflow.org/cache_enabled: "true"
           annotations:
             pipelines.kubeflow.org/component_spec_digest: '{"name": "Quantize gpu
-              model", "outputs": [], "version": "Quantize gpu model@sha256=dc6445aa31ba89ff7d4a3c1e6b23f3d7b18df9ed11a72c615e4e9d4ce9fc455d"}'
+              model", "outputs": [], "version": "Quantize gpu model@sha256=0c270db531779f120e2b06f1e82a11c3b3584627ee8d1adbb67d928db8a37dc5"}'
       when:
       - input: $(tasks.condition-11.results.outcome)
         operator: in
@@ -1136,6 +1164,7 @@ spec:
         - "true"
       runAfter:
       - sparse-model
+      timeout: 5h
     - name: eval-model-3
       params:
       - name: eval_batch_size
@@ -1243,6 +1272,7 @@ spec:
         - "true"
       runAfter:
       - quantize-gpu-model
+      timeout: 5h
     - name: upload-model-3
       params:
       - name: save_folder_name
@@ -1462,6 +1492,7 @@ spec:
         - "true"
       runAfter:
       - sparse-model
+      timeout: 5h
     - name: upload-model-4
       params:
       - name: save_folder_name
@@ -1592,8 +1623,9 @@ spec:
           - sh
           - -c
           - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
-            'datasets' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet
-            --no-warn-script-location 'datasets' --user) && "$0" "$@"
+            'datasets' 'sentencepiece' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3
+            -m pip install --quiet --no-warn-script-location 'datasets' 'sentencepiece'
+            --user) && "$0" "$@"
           - sh
           - -ec
           - |
@@ -1664,9 +1696,9 @@ spec:
           image: quay.io/ltomasbo/neural-magic:sparseml
           resources:
             limits:
-              nvidia.com/gpu: '1'
+              nvidia.com/gpu: '2'
             requests:
-              nvidia.com/gpu: '1'
+              nvidia.com/gpu: '2'
           volumeMounts:
           - mountPath: /mnt/models
             name: models-shared
@@ -1681,7 +1713,7 @@ spec:
             pipelines.kubeflow.org/cache_enabled: "true"
           annotations:
             pipelines.kubeflow.org/component_spec_digest: '{"name": "Quantize cpu
-              model", "outputs": [], "version": "Quantize cpu model@sha256=52864b80d9ab7005b2448f87e67e78bc8a647853403c1af64c5d26b45b70e546"}'
+              model", "outputs": [], "version": "Quantize cpu model@sha256=9585aac60cdd2ff6884077f2a87b137fa37e22307cc6073f484a01dca23ded3e"}'
       when:
       - input: $(tasks.condition-20.results.outcome)
         operator: in
@@ -1689,6 +1721,7 @@ spec:
         - "true"
       runAfter:
       - download-model
+      timeout: 5h
     - name: eval-model-5
       params:
       - name: eval_batch_size
@@ -1792,6 +1825,7 @@ spec:
         - "true"
       runAfter:
       - quantize-cpu-model-2
+      timeout: 5h
     - name: export-model-3
       params:
       - name: shared_volume
@@ -1852,6 +1886,7 @@ spec:
         - "true"
       runAfter:
       - quantize-cpu-model-2
+      timeout: 5h
     - name: upload-model-5
       params:
       - name: save_folder_name
@@ -2063,6 +2098,7 @@ spec:
         - "true"
       runAfter:
       - download-model
+      timeout: 5h
     - name: export-model-4
       params:
       - name: shared_volume
@@ -2123,6 +2159,7 @@ spec:
         - "true"
       runAfter:
       - download-model
+      timeout: 5h
     - name: upload-model-6
       params:
       - name: save_folder_name
@@ -2253,9 +2290,10 @@ spec:
           - sh
           - -c
           - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
-            'datasets' 'auto-gptq==0.7.1' 'torch==2.2.1' || PIP_DISABLE_PIP_VERSION_CHECK=1
-            python3 -m pip install --quiet --no-warn-script-location 'datasets' 'auto-gptq==0.7.1'
-            'torch==2.2.1' --user) && "$0" "$@"
+            'datasets' 'auto-gptq==0.7.1' 'torch==2.2.1' 'sentencepiece' 'protobuf'
+            || PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
+            'datasets' 'auto-gptq==0.7.1' 'torch==2.2.1' 'sentencepiece' 'protobuf'
+            --user) && "$0" "$@"
           - sh
           - -ec
           - |
@@ -2279,6 +2317,7 @@ spec:
 
                 print("Loading the dataset and tokenizers")
                 dataset = load_dataset(ds, split="train_sft")
+                #dataset = load_dataset(ds, split="train")
                 tokenizer = AutoTokenizer.from_pretrained(model_path)
                 ds = dataset.shuffle().select(range(NUM_EXAMPLES))
                 ds = ds.map(preprocess)
@@ -2337,9 +2376,9 @@ spec:
           image: registry.access.redhat.com/ubi9/python-311
           resources:
             limits:
-              nvidia.com/gpu: '1'
+              nvidia.com/gpu: '2'
             requests:
-              nvidia.com/gpu: '1'
+              nvidia.com/gpu: '2'
           volumeMounts:
           - mountPath: /mnt/models
             name: models-shared
@@ -2354,7 +2393,7 @@ spec:
             pipelines.kubeflow.org/cache_enabled: "true"
           annotations:
             pipelines.kubeflow.org/component_spec_digest: '{"name": "Quantize gpu
-              model", "outputs": [], "version": "Quantize gpu model@sha256=dc6445aa31ba89ff7d4a3c1e6b23f3d7b18df9ed11a72c615e4e9d4ce9fc455d"}'
+              model", "outputs": [], "version": "Quantize gpu model@sha256=0c270db531779f120e2b06f1e82a11c3b3584627ee8d1adbb67d928db8a37dc5"}'
       when:
       - input: $(tasks.condition-28.results.outcome)
         operator: in
@@ -2362,6 +2401,7 @@ spec:
         - "true"
       runAfter:
       - download-model
+      timeout: 5h
     - name: eval-model-7
       params:
       - name: eval_batch_size
@@ -2465,6 +2505,7 @@ spec:
         - "true"
       runAfter:
       - quantize-gpu-model-2
+      timeout: 5h
     - name: upload-model-7
       params:
       - name: save_folder_name
@@ -2676,6 +2717,7 @@ spec:
         - "true"
       runAfter:
       - download-model
+      timeout: 5h
     - name: upload-model-8
       params:
       - name: save_folder_name
@@ -2883,6 +2925,7 @@ spec:
         - "true"
       runAfter:
       - download-model
+      timeout: 5h
     - name: condition-1
       params:
       - name: operand1
@@ -4629,3 +4672,6 @@ spec:
         value: "true"
       nodeSelector:
         nvidia.com/gpu.present: "true"
+  timeouts:
+    pipeline: 605100s
+    tasks: 604800s
