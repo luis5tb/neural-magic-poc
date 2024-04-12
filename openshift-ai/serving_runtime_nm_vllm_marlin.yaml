@@ -5,28 +5,29 @@ labels:
 metadata:
   annotations:
     openshift.io/display-name: nm-vLLM Runtime Marlin
+    opendatahub.io/recommended-accelerators: '["nvidia.com/gpu"]'
   name: nm-vllm-runtime-marlin
 spec:
-  volumes:
-    - name: kserve-aux
-      emptyDir: {}
   containers:
     - args:
-        - >
-          cp -r /mnt/models/* /mnt/models-aux &&
-          python3 -m vllm.entrypoints.openai.api_server --model /mnt/models-aux --max-model-len 2048 --disable-log-requests
+        - --port
+        - "8080"
+        - --model
+        - /mnt/models
+        - --max-model-len
+        - "2048"
+        - --disable-log-requests
+        # - --tensor-parallel-size
+        # - "2"
       command:
-        - /bin/sh
-        - -c
+        - python3
+        - -m
+        - vllm.entrypoints.api_server
       image: quay.io/ltomasbo/neural-magic:nm-vllm
       name: kserve-container
       ports:
-        - containerPort: 8080
+        - containerPort: 8000
           protocol: TCP
-      volumeMounts:
-        - name: kserve-aux
-          readOnly: false
-          mountPath: /mnt/models-aux
   multiModel: false
   supportedModelFormats:
     - autoSelect: true

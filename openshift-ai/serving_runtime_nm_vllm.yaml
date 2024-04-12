@@ -4,19 +4,23 @@ labels:
   opendatahub.io/dashboard: "true"
 metadata:
   annotations:
-    openshift.io/display-name: vLLM Runtime
+    openshift.io/display-name: nm-vLLM Runtime
     opendatahub.io/recommended-accelerators: '["nvidia.com/gpu"]'
-  name: vllm-runtime
+  name: nm-vllm-runtime
 spec:
   containers:
     - args:
-        - >
-          python3 -m vllm.entrypoints.openai.api_server --model /mnt/models
-          --port 8000
+        - --port
+        - "8000"
+        - --model
+        - /mnt/models
+        - --sparsity
+        - sparse_w16a16 
       command:
-        - /bin/sh
-        - -c
-      image: quay.io/ltomasbo/vllm
+        - python3
+        - -m
+        - vllm.entrypoints.api_server
+      image: quay.io/ltomasbo/neural-magic:nm-vllm
       name: kserve-container
       ports:
         - containerPort: 8000
