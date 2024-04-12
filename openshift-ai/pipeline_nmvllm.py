@@ -485,7 +485,7 @@ def sparseml_pipeline(
     shared_volume:str='models-shared',
     sparse:bool=True,
     sparsity_ratio:float=0.5,
-    sparsity_targets:str='["re:model.layers.\d*$"]',
+    sparsity_targets:str='["re:model.layers.\\d*$"]',  #  ["re:transformer.h.\\d*$"]
     quantize:bool=True,
     eval:bool=False,
     eval_task:str="hellaswag",
