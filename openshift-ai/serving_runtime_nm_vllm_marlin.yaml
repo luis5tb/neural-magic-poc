@@ -11,7 +11,7 @@ spec:
   containers:
     - args:
         - --port
-        - "8080"
+        - "8000"
         - --model
         - /mnt/models
         - --max-model-len
@@ -22,7 +22,7 @@ spec:
       command:
         - python3
         - -m
-        - vllm.entrypoints.api_server
+        - vllm.entrypoints.openai.api_server
       image: quay.io/ltomasbo/neural-magic:nm-vllm
       name: kserve-container
       ports:

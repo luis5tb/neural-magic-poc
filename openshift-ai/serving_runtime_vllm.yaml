@@ -25,3 +25,36 @@ spec:
   supportedModelFormats:
     - autoSelect: true
       name: onnx
+
+
+##### Community
+apiVersion: serving.kserve.io/v1alpha1
+kind: ServingRuntime
+labels:
+  opendatahub.io/dashboard: "true"
+metadata:
+  annotations:
+    openshift.io/display-name: vLLM Runtime
+    opendatahub.io/recommended-accelerators: '["nvidia.com/gpu"]'
+  name: vllm-runtime
+spec:
+  containers:
+    - args:
+        - --port
+        - "8080"
+        - --model
+        - /mnt/models
+      command:
+        - python3
+        - -m
+        - vllm.entrypoints.openai.api_server
+      image: kserve/vllmserver:latest
+      name: kserve-container
+      ports:
+        - containerPort: 8080
+          protocol: TCP
+  multiModel: false
+  supportedModelFormats:
+    - autoSelect: true
+      name: onnx
+
