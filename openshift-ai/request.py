@@ -5,12 +5,11 @@ import gradio as gr
 from openai import OpenAI
 
 
-URL = "https://neural-magic-llm-poc-predictor-neural-magic-poc.apps.devcluster.openshift.com"
+#URL = "https://SERVING_RUNTIME-predictor-NAMESPACE.apps.devcluster.openshift.com"
 
-
-MODEL = "hf:neuralmagic/TinyLlama-1.1B-Chat-v0.4-pruned50-quant-ds"
-MODEL_DEFAULT = "/mnt/models/deployment"
 MODEL_AUX = "/mnt/models-aux"
+MODEL = "/mnt/models"
+
 
 def get_answer(question, url, model):
     client = OpenAI(base_url=url, api_key="EMPTY")
@@ -25,7 +24,7 @@ def get_answer(question, url, model):
     completion = client.completions.create(
         model=model,
         prompt=prompt,
-        max_tokens=100,
+        max_tokens=1000,
         temperature=0,
         n=1,
         stream=stream)
@@ -47,6 +46,7 @@ def get_answer_req(question, url, model):
     data = {
         "model": model,
         "max_tokens": 1000,
+        "temperature": 0,
         "messages": [
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": question}
@@ -71,7 +71,7 @@ def get_answer_req(question, url, model):
 
 iface = gr.Interface(fn=get_answer_req,
 #                     inputs=["text", gr.Dropdown(choices=[URL]), gr.Dropdown(choices=[MODEL])],             
-                     inputs=["text", gr.Dropdown(choices=[URL]), gr.Dropdown(choices=[MODEL, MODEL_AUX, MODEL_DEFAULT])],
+                     inputs=["text", gr.Dropdown(choices=[URL]), gr.Dropdown(choices=[MODEL, MODEL_AUX])],
                      outputs="text")
 
 iface.launch()
