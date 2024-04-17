@@ -250,7 +250,7 @@ def export_model(model_path: str, exported_model_path: str):
     )
 
 
-def eval_model(model_path: str, tasks: str, batch_size: str):
+def cpu_eval_model(model_path: str, tasks: str, batch_size: str):
     import subprocess
     import os
 
@@ -267,8 +267,36 @@ def eval_model(model_path: str, tasks: str, batch_size: str):
                              "--no_cache",
                              "--write_out",
                              "--device", "cuda:0",
-                             "--num_fewshot", "0",
-                             "--limit", "1000"],
+                             "--num_fewshot", "0"],
+                            capture_output=True, text=True, env=env)
+
+    # Check for errors or output
+    if result.returncode == 0:
+        print("Model evaluated successfully:")
+        print(result.stdout)
+    else:
+        print("Error evaluating the model:")
+        print(result.stderr)
+
+def gpu_eval_model(model_path: str, tasks: str, batch_size: str, sparse: bool=False):
+    import subprocess
+    import os
+
+    if sparse:
+        model_args = "pretrained=" + model_path + ",sparsity=sparse_w16a16"  # + ",trust_remote_code=True"
+    else:
+        model_args = "pretrained=" + model_path  + ",tensor_parallel_size=1"  # + ",trust_remote_code=True"
+
+    # Execute the huggingface_hub-cli command
+    env = os.environ.copy()
+    env["CUDA_VISIBLE_DEVICES"] = "0"
+    result = subprocess.run(["lm_eval",
+                             "--model", "vllm",
+                             "--model_args", model_args,
+                             "--tasks", tasks,
+                             "--batch_size", batch_size,
+                             "--write_out",
+                             "--num_fewshot", "0"],
                             capture_output=True, text=True, env=env)
 
     # Check for errors or output
@@ -328,9 +356,13 @@ export_op = comp.create_component_from_func(export_model,
                                             packages_to_install=[],
                                             base_image='quay.io/ltomasbo/neural-magic:sparseml')
 #                                            base_image='quay.io/ltomasbo/sparseml')
-eval_op = comp.create_component_from_func(eval_model,
+cpu_eval_op = comp.create_component_from_func(cpu_eval_model,
                                           packages_to_install=["datasets", "auto-gptq", "optimum"],
                                           base_image='quay.io/ltomasbo/neural-magic:sparseml_eval')
+#                                          base_image='quay.io/ltomasbo/sparseml:eval2')
+gpu_eval_op = comp.create_component_from_func(gpu_eval_model,
+                                          packages_to_install=[],
+                                          base_image='quay.io/ltomasbo/neural-magic:nm_vllm_eval')
 #                                          base_image='quay.io/ltomasbo/sparseml:eval2')
 upload_op = comp.create_component_from_func(upload_model,
                                             packages_to_install=["boto3"],
@@ -359,7 +391,7 @@ def cpu_model_optimization(predecing_task:object, model_path:str,
         quant_llm.after(predecing_task)
 
         with dsl.Condition(eval == True):
-            eval_llm = eval_op(model_path=QUANT_MODEL_DIR, tasks=eval_task,
+            eval_llm = cpu_eval_op(model_path=QUANT_MODEL_DIR, tasks=eval_task,
                                batch_size=eval_batch_size)
             eval_llm.add_pvolumes({"/mnt/models": vol})
             eval_llm.add_node_selector_constraint(
@@ -392,7 +424,7 @@ def cpu_model_optimization(predecing_task:object, model_path:str,
     with dsl.Condition(quantize == False):
         with dsl.Condition(eval == True):
             with dsl.Condition(sparse == True):
-                eval_llm = eval_op(model_path=model_path, tasks=eval_task,
+                eval_llm = cpu_eval_op(model_path=model_path, tasks=eval_task,
                                    batch_size=eval_batch_size)
                 eval_llm.add_pvolumes({"/mnt/models": vol})
                 eval_llm.add_node_selector_constraint(
@@ -445,7 +477,7 @@ def gpu_model_optimization(predecing_task:object, model_path:str,
         quant_llm.after(predecing_task)
 
         with dsl.Condition(eval == True):
-            eval_llm = eval_op(model_path=QUANT_MODEL_DIR, tasks=eval_task,
+            eval_llm = gpu_eval_op(model_path=QUANT_MODEL_DIR, tasks=eval_task,
                                batch_size=eval_batch_size)
             eval_llm.add_pvolumes({"/mnt/models": vol})
             eval_llm.add_node_selector_constraint(
@@ -473,8 +505,9 @@ def gpu_model_optimization(predecing_task:object, model_path:str,
     with dsl.Condition(quantize == False):
         with dsl.Condition(eval == True):
             with dsl.Condition(sparse == True):
-                eval_llm = eval_op(model_path=model_path, tasks=eval_task,
-                                   batch_size=eval_batch_size)
+                eval_llm = gpu_eval_op(model_path=model_path, tasks=eval_task,
+                                       batch_size=eval_batch_size,
+                                       sparse=sparse)
                 eval_llm.add_pvolumes({"/mnt/models": vol})
                 eval_llm.add_node_selector_constraint(
                     label_name='nvidia.com/gpu.present', value='true')
@@ -515,7 +548,7 @@ def sparseml_pipeline(
     quantize:bool=True,
     eval:bool=False,
     eval_task:str="hellaswag",
-    eval_batch_size:str="64",
+    eval_batch_size:str="auto",  # 64
     save_model:bool=True,
     save_folder_name:str="optimized-1"
 ):
@@ -594,8 +627,8 @@ def sparseml_pipeline(
                                    gpu_toleration)
             
     with dsl.Condition(eval == True):
-        eval_llm_base = eval_op(model_path=MODEL_DIR, tasks=eval_task,
-                                batch_size=eval_batch_size)
+        eval_llm_base = gpu_eval_op(model_path=MODEL_DIR, tasks=eval_task,
+                                    batch_size=eval_batch_size)
         eval_llm_base.add_pvolumes({"/mnt/models": vol})
         eval_llm_base.add_node_selector_constraint(
             label_name='nvidia.com/gpu.present', value='true')

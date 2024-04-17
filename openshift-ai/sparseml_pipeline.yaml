@@ -1,4 +1,4 @@
-apiVersion: tekton.dev/v1beta1
+apiVersion: tekton.dev/v1
 kind: PipelineRun
 metadata:
   name: llm-pruning-pipeline
@@ -8,14 +8,14 @@ metadata:
     tekton.dev/artifact_bucket: mlpipeline
     tekton.dev/artifact_endpoint: minio-service.kubeflow:9000
     tekton.dev/artifact_endpoint_scheme: http://
-    tekton.dev/artifact_items: '{"download-model": [], "eval-model": [], "eval-model-2":
-      [], "eval-model-3": [], "eval-model-4": [], "eval-model-5": [], "eval-model-6":
-      [], "eval-model-7": [], "eval-model-8": [], "eval-model-9": [], "export-model":
-      [], "export-model-2": [], "export-model-3": [], "export-model-4": [], "quantize-cpu-model":
-      [], "quantize-cpu-model-2": [], "quantize-gpu-model": [], "quantize-gpu-model-2":
-      [], "sparse-model": [], "upload-model": [], "upload-model-2": [], "upload-model-3":
-      [], "upload-model-4": [], "upload-model-5": [], "upload-model-6": [], "upload-model-7":
-      [], "upload-model-8": []}'
+    tekton.dev/artifact_items: '{"cpu-eval-model": [], "cpu-eval-model-2": [], "cpu-eval-model-3":
+      [], "cpu-eval-model-4": [], "download-model": [], "export-model": [], "export-model-2":
+      [], "export-model-3": [], "export-model-4": [], "gpu-eval-model": [], "gpu-eval-model-2":
+      [], "gpu-eval-model-3": [], "gpu-eval-model-4": [], "gpu-eval-model-5": [],
+      "quantize-cpu-model": [], "quantize-cpu-model-2": [], "quantize-gpu-model":
+      [], "quantize-gpu-model-2": [], "sparse-model": [], "upload-model": [], "upload-model-2":
+      [], "upload-model-3": [], "upload-model-4": [], "upload-model-5": [], "upload-model-6":
+      [], "upload-model-7": [], "upload-model-8": []}'
     sidecar.istio.io/inject: "false"
     tekton.dev/template: ''
     pipelines.kubeflow.org/big_data_passing_format: $(workspaces.$TASK_NAME.path)/artifacts/$ORIG_PR_NAME/$TASKRUN_NAME/$TASK_PARAM_NAME
@@ -31,7 +31,7 @@ metadata:
       true, "type": "String"}, {"default": "True", "name": "quantize", "optional":
       true, "type": "Boolean"}, {"default": "False", "name": "eval", "optional": true,
       "type": "Boolean"}, {"default": "hellaswag", "name": "eval_task", "optional":
-      true, "type": "String"}, {"default": "64", "name": "eval_batch_size", "optional":
+      true, "type": "String"}, {"default": "auto", "name": "eval_batch_size", "optional":
       true, "type": "String"}, {"default": "True", "name": "save_model", "optional":
       true, "type": "Boolean"}, {"default": "optimized-1", "name": "save_folder_name",
       "optional": true, "type": "String"}], "name": "LLM Pruning Pipeline"}'
@@ -45,7 +45,7 @@ spec:
   - name: eval
     value: "False"
   - name: eval_batch_size
-    value: '64'
+    value: auto
   - name: eval_task
     value: hellaswag
   - name: inference_target
@@ -73,7 +73,7 @@ spec:
     - name: eval
       default: "False"
     - name: eval_batch_size
-      default: '64'
+      default: auto
     - name: eval_task
       default: hellaswag
     - name: inference_target
@@ -335,7 +335,6 @@ spec:
         - "true"
       runAfter:
       - download-model
-      timeout: 5h
     - name: quantize-cpu-model
       params:
       - name: shared_volume
@@ -383,12 +382,6 @@ spec:
                         - SiLUActivation
                         - MatMulOutput_QK
                         - MatMulOutput_PV
-                        # Skip quantizing the layers with the most sensitive activations
-                        #- model.layers.21.mlp.down_proj
-                        #- model.layers.7.mlp.down_proj
-                        #- model.layers.2.mlp.down_proj
-                        #- model.layers.8.self_attn.q_proj
-                        #- model.layers.8.self_attn.k_proj
                       post_oneshot_calibration: true
                       scheme_overrides:
                         # Enable channelwise quantization for better accuracy
@@ -409,8 +402,40 @@ spec:
                             symmetric: false
                 """
 
+                # recipe = """
+                # test_stage:
+                #   obcq_modifiers:
+                #     LogarithmicEqualizationModifier:
+                #       mappings: [
+                #         [["re:.*c_proj"], ["re:.*ln_1", "re:.*ln_2"]],
+                #         [["re:.*c_fc"], []],
+                #       ]
+                #     QuantizationModifier:
+                #       ignore:
+                #         # These operations don't make sense to quantize
+                #         - LayerNorm
+                #         - GELUActivation
+                #       post_oneshot_calibration: true
+                #       scheme_overrides:
+                #         # Enable channelwise quantization for better accuracy
+                #         Linear:
+                #           weights:
+                #             num_bits: 8
+                #             symmetric: true
+                #             strategy: channel
+                #         # For the embeddings, only weight-quantization makes sense
+                #         Embedding:
+                #           input_activations: null
+                #           weights:
+                #             num_bits: 8
+                #             symmetric: false
+                # """
+
+                model = sparseml.transformers.SparseAutoModelForCausalLM.from_pretrained(
+                    model_path, device_map="auto")
+
                 sparseml.transformers.oneshot(
-                    model=model_path,
+                    model=model,
                     dataset=ds,
                     recipe=recipe,
                     output_dir=compress_model_path,
@@ -444,7 +469,7 @@ spec:
             pipelines.kubeflow.org/cache_enabled: "true"
           annotations:
             pipelines.kubeflow.org/component_spec_digest: '{"name": "Quantize cpu
-              model", "outputs": [], "version": "Quantize cpu model@sha256=9585aac60cdd2ff6884077f2a87b137fa37e22307cc6073f484a01dca23ded3e"}'
+              model", "outputs": [], "version": "Quantize cpu model@sha256=febc6971fd90f021f8ca9c5c4e64b4323fc7e279b20bfa2a3a0d1f7b4d72dd6d"}'
       when:
       - input: $(tasks.condition-3.results.outcome)
         operator: in
@@ -456,8 +481,7 @@ spec:
         - "true"
       runAfter:
       - sparse-model
-      timeout: 5h
-    - name: eval-model
+    - name: cpu-eval-model
       params:
       - name: eval_batch_size
         value: $(params.eval_batch_size)
@@ -489,7 +513,7 @@ spec:
             printf "%s" "$0" > "$program_path"
             python3 -u "$program_path" "$@"
           - |
-            def eval_model(model_path, tasks, batch_size):
+            def cpu_eval_model(model_path, tasks, batch_size):
                 import subprocess
                 import os
 
@@ -506,8 +530,7 @@ spec:
                                          "--no_cache",
                                          "--write_out",
                                          "--device", "cuda:0",
-                                         "--num_fewshot", "0",
-                                         "--limit", "1000"],
+                                         "--num_fewshot", "0"],
                                         capture_output=True, text=True, env=env)
 
                 # Check for errors or output
@@ -519,13 +542,13 @@ spec:
                     print(result.stderr)
 
             import argparse
-            _parser = argparse.ArgumentParser(prog='Eval model', description='')
+            _parser = argparse.ArgumentParser(prog='Cpu eval model', description='')
             _parser.add_argument("--model-path", dest="model_path", type=str, required=True, default=argparse.SUPPRESS)
             _parser.add_argument("--tasks", dest="tasks", type=str, required=True, default=argparse.SUPPRESS)
             _parser.add_argument("--batch-size", dest="batch_size", type=str, required=True, default=argparse.SUPPRESS)
             _parsed_args = vars(_parser.parse_args())
 
-            _outputs = eval_model(**_parsed_args)
+            _outputs = cpu_eval_model(**_parsed_args)
           image: quay.io/ltomasbo/neural-magic:sparseml_eval
           resources:
             limits:
@@ -547,8 +570,8 @@ spec:
           labels:
             pipelines.kubeflow.org/cache_enabled: "true"
           annotations:
-            pipelines.kubeflow.org/component_spec_digest: '{"name": "Eval model",
-              "outputs": [], "version": "Eval model@sha256=a186d2e13ef9ab5e6b2a1bf4df6a587645a009d33811e5dd916de5329715af88"}'
+            pipelines.kubeflow.org/component_spec_digest: '{"name": "Cpu eval model",
+              "outputs": [], "version": "Cpu eval model@sha256=10ccd3939ac2aae488c6d93c21983fb933ccec164aebaf42bbbf8cb0b464da87"}'
       when:
       - input: $(tasks.condition-4.results.outcome)
         operator: in
@@ -564,7 +587,6 @@ spec:
         - "true"
       runAfter:
       - quantize-cpu-model
-      timeout: 5h
     - name: export-model
       params:
       - name: shared_volume
@@ -629,7 +651,6 @@ spec:
         - "true"
       runAfter:
       - quantize-cpu-model
-      timeout: 5h
     - name: upload-model
       params:
       - name: save_folder_name
@@ -746,7 +767,7 @@ spec:
         - "true"
       runAfter:
       - export-model
-    - name: eval-model-2
+    - name: cpu-eval-model-2
       params:
       - name: eval_batch_size
         value: $(params.eval_batch_size)
@@ -778,7 +799,7 @@ spec:
             printf "%s" "$0" > "$program_path"
             python3 -u "$program_path" "$@"
           - |
-            def eval_model(model_path, tasks, batch_size):
+            def cpu_eval_model(model_path, tasks, batch_size):
                 import subprocess
                 import os
 
@@ -795,8 +816,7 @@ spec:
                                          "--no_cache",
                                          "--write_out",
                                          "--device", "cuda:0",
-                                         "--num_fewshot", "0",
-                                         "--limit", "1000"],
+                                         "--num_fewshot", "0"],
                                         capture_output=True, text=True, env=env)
 
                 # Check for errors or output
@@ -808,13 +828,13 @@ spec:
                     print(result.stderr)
 
             import argparse
-            _parser = argparse.ArgumentParser(prog='Eval model', description='')
+            _parser = argparse.ArgumentParser(prog='Cpu eval model', description='')
             _parser.add_argument("--model-path", dest="model_path", type=str, required=True, default=argparse.SUPPRESS)
             _parser.add_argument("--tasks", dest="tasks", type=str, required=True, default=argparse.SUPPRESS)
             _parser.add_argument("--batch-size", dest="batch_size", type=str, required=True, default=argparse.SUPPRESS)
             _parsed_args = vars(_parser.parse_args())
 
-            _outputs = eval_model(**_parsed_args)
+            _outputs = cpu_eval_model(**_parsed_args)
           image: quay.io/ltomasbo/neural-magic:sparseml_eval
           resources:
             limits:
@@ -836,8 +856,8 @@ spec:
           labels:
             pipelines.kubeflow.org/cache_enabled: "true"
           annotations:
-            pipelines.kubeflow.org/component_spec_digest: '{"name": "Eval model",
-              "outputs": [], "version": "Eval model@sha256=a186d2e13ef9ab5e6b2a1bf4df6a587645a009d33811e5dd916de5329715af88"}'
+            pipelines.kubeflow.org/component_spec_digest: '{"name": "Cpu eval model",
+              "outputs": [], "version": "Cpu eval model@sha256=10ccd3939ac2aae488c6d93c21983fb933ccec164aebaf42bbbf8cb0b464da87"}'
       when:
       - input: $(tasks.condition-8.results.outcome)
         operator: in
@@ -849,7 +869,6 @@ spec:
         - "true"
       runAfter:
       - sparse-model
-      timeout: 5h
     - name: export-model-2
       params:
       - name: shared_volume
@@ -914,7 +933,6 @@ spec:
         - "true"
       runAfter:
       - sparse-model
-      timeout: 5h
     - name: upload-model-2
       params:
       - name: save_folder_name
@@ -1049,10 +1067,9 @@ spec:
           - sh
           - -c
           - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
-            'datasets' 'auto-gptq==0.7.1' 'torch==2.2.1' 'sentencepiece' 'protobuf'
-            || PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
-            'datasets' 'auto-gptq==0.7.1' 'torch==2.2.1' 'sentencepiece' 'protobuf'
-            --user) && "$0" "$@"
+            'datasets' 'auto-gptq==0.7.1' 'torch==2.2.1' 'sentencepiece' || PIP_DISABLE_PIP_VERSION_CHECK=1
+            python3 -m pip install --quiet --no-warn-script-location 'datasets' 'auto-gptq==0.7.1'
+            'torch==2.2.1' 'sentencepiece' --user) && "$0" "$@"
           - sh
           - -ec
           - |
@@ -1152,7 +1169,7 @@ spec:
             pipelines.kubeflow.org/cache_enabled: "true"
           annotations:
             pipelines.kubeflow.org/component_spec_digest: '{"name": "Quantize gpu
-              model", "outputs": [], "version": "Quantize gpu model@sha256=0c270db531779f120e2b06f1e82a11c3b3584627ee8d1adbb67d928db8a37dc5"}'
+              model", "outputs": [], "version": "Quantize gpu model@sha256=d89b8dd0ea6c502c43334d592bea5737b7f98a12a9fd01dc280ec1b7c176ddd7"}'
       when:
       - input: $(tasks.condition-11.results.outcome)
         operator: in
@@ -1164,8 +1181,7 @@ spec:
         - "true"
       runAfter:
       - sparse-model
-      timeout: 5h
-    - name: eval-model-3
+    - name: gpu-eval-model
       params:
       - name: eval_batch_size
         value: $(params.eval_batch_size)
@@ -1183,13 +1199,9 @@ spec:
           - $(inputs.params.eval_task)
           - --batch-size
           - $(inputs.params.eval_batch_size)
+          - --sparse
+          - "False"
           command:
-          - sh
-          - -c
-          - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
-            'datasets' 'auto-gptq' 'optimum' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3
-            -m pip install --quiet --no-warn-script-location 'datasets' 'auto-gptq'
-            'optimum' --user) && "$0" "$@"
           - sh
           - -ec
           - |
@@ -1197,25 +1209,25 @@ spec:
             printf "%s" "$0" > "$program_path"
             python3 -u "$program_path" "$@"
           - |
-            def eval_model(model_path, tasks, batch_size):
+            def gpu_eval_model(model_path, tasks, batch_size, sparse=False):
                 import subprocess
                 import os
 
-                model_args = "pretrained=" + model_path  # + ",trust_remote_code=True"
+                if sparse:
+                    model_args = "pretrained=" + model_path + ",sparsity=sparse_w16a16"  # + ",trust_remote_code=True"
+                else:
+                    model_args = "pretrained=" + model_path  + ",tensor_parallel_size=1"  # + ",trust_remote_code=True"
 
                 # Execute the huggingface_hub-cli command
                 env = os.environ.copy()
                 env["CUDA_VISIBLE_DEVICES"] = "0"
-                result = subprocess.run(["python", "./lm-evaluation-harness/main.py",
-                                         "--model", "sparseml",
+                result = subprocess.run(["lm_eval",
+                                         "--model", "vllm",
                                          "--model_args", model_args,
                                          "--tasks", tasks,
                                          "--batch_size", batch_size,
-                                         "--no_cache",
                                          "--write_out",
-                                         "--device", "cuda:0",
-                                         "--num_fewshot", "0",
-                                         "--limit", "1000"],
+                                         "--num_fewshot", "0"],
                                         capture_output=True, text=True, env=env)
 
                 # Check for errors or output
@@ -1226,15 +1238,20 @@ spec:
                     print("Error evaluating the model:")
                     print(result.stderr)
 
+            def _deserialize_bool(s) -> bool:
+                from distutils.util import strtobool
+                return strtobool(s) == 1
+
             import argparse
-            _parser = argparse.ArgumentParser(prog='Eval model', description='')
+            _parser = argparse.ArgumentParser(prog='Gpu eval model', description='')
             _parser.add_argument("--model-path", dest="model_path", type=str, required=True, default=argparse.SUPPRESS)
             _parser.add_argument("--tasks", dest="tasks", type=str, required=True, default=argparse.SUPPRESS)
             _parser.add_argument("--batch-size", dest="batch_size", type=str, required=True, default=argparse.SUPPRESS)
+            _parser.add_argument("--sparse", dest="sparse", type=_deserialize_bool, required=False, default=argparse.SUPPRESS)
             _parsed_args = vars(_parser.parse_args())
 
-            _outputs = eval_model(**_parsed_args)
-          image: quay.io/ltomasbo/neural-magic:sparseml_eval
+            _outputs = gpu_eval_model(**_parsed_args)
+          image: quay.io/ltomasbo/neural-magic:nm_vllm_eval
           resources:
             limits:
               nvidia.com/gpu: '1'
@@ -1255,8 +1272,8 @@ spec:
           labels:
             pipelines.kubeflow.org/cache_enabled: "true"
           annotations:
-            pipelines.kubeflow.org/component_spec_digest: '{"name": "Eval model",
-              "outputs": [], "version": "Eval model@sha256=a186d2e13ef9ab5e6b2a1bf4df6a587645a009d33811e5dd916de5329715af88"}'
+            pipelines.kubeflow.org/component_spec_digest: '{"name": "Gpu eval model",
+              "outputs": [], "version": "Gpu eval model@sha256=302fd465fe5e2cb95ed215d256c1b9b7af65e80796a30568a9bd74b2a534a34c"}'
       when:
       - input: $(tasks.condition-12.results.outcome)
         operator: in
@@ -1272,7 +1289,6 @@ spec:
         - "true"
       runAfter:
       - quantize-gpu-model
-      timeout: 5h
     - name: upload-model-3
       params:
       - name: save_folder_name
@@ -1389,7 +1405,7 @@ spec:
         - "true"
       runAfter:
       - quantize-gpu-model
-    - name: eval-model-4
+    - name: gpu-eval-model-2
       params:
       - name: eval_batch_size
         value: $(params.eval_batch_size)
@@ -1397,6 +1413,8 @@ spec:
         value: $(params.eval_task)
       - name: shared_volume
         value: $(params.shared_volume)
+      - name: sparse
+        value: $(params.sparse)
       taskSpec:
         steps:
         - name: main
@@ -1407,13 +1425,9 @@ spec:
           - $(inputs.params.eval_task)
           - --batch-size
           - $(inputs.params.eval_batch_size)
+          - --sparse
+          - $(inputs.params.sparse)
           command:
-          - sh
-          - -c
-          - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
-            'datasets' 'auto-gptq' 'optimum' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3
-            -m pip install --quiet --no-warn-script-location 'datasets' 'auto-gptq'
-            'optimum' --user) && "$0" "$@"
           - sh
           - -ec
           - |
@@ -1421,25 +1435,25 @@ spec:
             printf "%s" "$0" > "$program_path"
             python3 -u "$program_path" "$@"
           - |
-            def eval_model(model_path, tasks, batch_size):
+            def gpu_eval_model(model_path, tasks, batch_size, sparse=False):
                 import subprocess
                 import os
 
-                model_args = "pretrained=" + model_path  # + ",trust_remote_code=True"
+                if sparse:
+                    model_args = "pretrained=" + model_path + ",sparsity=sparse_w16a16"  # + ",trust_remote_code=True"
+                else:
+                    model_args = "pretrained=" + model_path  + ",tensor_parallel_size=1"  # + ",trust_remote_code=True"
 
                 # Execute the huggingface_hub-cli command
                 env = os.environ.copy()
                 env["CUDA_VISIBLE_DEVICES"] = "0"
-                result = subprocess.run(["python", "./lm-evaluation-harness/main.py",
-                                         "--model", "sparseml",
+                result = subprocess.run(["lm_eval",
+                                         "--model", "vllm",
                                          "--model_args", model_args,
                                          "--tasks", tasks,
                                          "--batch_size", batch_size,
-                                         "--no_cache",
                                          "--write_out",
-                                         "--device", "cuda:0",
-                                         "--num_fewshot", "0",
-                                         "--limit", "1000"],
+                                         "--num_fewshot", "0"],
                                         capture_output=True, text=True, env=env)
 
                 # Check for errors or output
@@ -1450,15 +1464,20 @@ spec:
                     print("Error evaluating the model:")
                     print(result.stderr)
 
+            def _deserialize_bool(s) -> bool:
+                from distutils.util import strtobool
+                return strtobool(s) == 1
+
             import argparse
-            _parser = argparse.ArgumentParser(prog='Eval model', description='')
+            _parser = argparse.ArgumentParser(prog='Gpu eval model', description='')
             _parser.add_argument("--model-path", dest="model_path", type=str, required=True, default=argparse.SUPPRESS)
             _parser.add_argument("--tasks", dest="tasks", type=str, required=True, default=argparse.SUPPRESS)
             _parser.add_argument("--batch-size", dest="batch_size", type=str, required=True, default=argparse.SUPPRESS)
+            _parser.add_argument("--sparse", dest="sparse", type=_deserialize_bool, required=False, default=argparse.SUPPRESS)
             _parsed_args = vars(_parser.parse_args())
 
-            _outputs = eval_model(**_parsed_args)
-          image: quay.io/ltomasbo/neural-magic:sparseml_eval
+            _outputs = gpu_eval_model(**_parsed_args)
+          image: quay.io/ltomasbo/neural-magic:nm_vllm_eval
           resources:
             limits:
               nvidia.com/gpu: '1'
@@ -1471,6 +1490,7 @@ spec:
         - name: eval_batch_size
         - name: eval_task
         - name: shared_volume
+        - name: sparse
         volumes:
         - name: models-shared
           persistentVolumeClaim:
@@ -1479,8 +1499,8 @@ spec:
           labels:
             pipelines.kubeflow.org/cache_enabled: "true"
           annotations:
-            pipelines.kubeflow.org/component_spec_digest: '{"name": "Eval model",
-              "outputs": [], "version": "Eval model@sha256=a186d2e13ef9ab5e6b2a1bf4df6a587645a009d33811e5dd916de5329715af88"}'
+            pipelines.kubeflow.org/component_spec_digest: '{"name": "Gpu eval model",
+              "outputs": [], "version": "Gpu eval model@sha256=302fd465fe5e2cb95ed215d256c1b9b7af65e80796a30568a9bd74b2a534a34c"}'
       when:
       - input: $(tasks.condition-16.results.outcome)
         operator: in
@@ -1492,7 +1512,6 @@ spec:
         - "true"
       runAfter:
       - sparse-model
-      timeout: 5h
     - name: upload-model-4
       params:
       - name: save_folder_name
@@ -1652,12 +1671,6 @@ spec:
                         - SiLUActivation
                         - MatMulOutput_QK
                         - MatMulOutput_PV
-                        # Skip quantizing the layers with the most sensitive activations
-                        #- model.layers.21.mlp.down_proj
-                        #- model.layers.7.mlp.down_proj
-                        #- model.layers.2.mlp.down_proj
-                        #- model.layers.8.self_attn.q_proj
-                        #- model.layers.8.self_attn.k_proj
                       post_oneshot_calibration: true
                       scheme_overrides:
                         # Enable channelwise quantization for better accuracy
@@ -1678,8 +1691,40 @@ spec:
                             symmetric: false
                 """
 
+                # recipe = """
+                # test_stage:
+                #   obcq_modifiers:
+                #     LogarithmicEqualizationModifier:
+                #       mappings: [
+                #         [["re:.*c_proj"], ["re:.*ln_1", "re:.*ln_2"]],
+                #         [["re:.*c_fc"], []],
+                #       ]
+                #     QuantizationModifier:
+                #       ignore:
+                #         # These operations don't make sense to quantize
+                #         - LayerNorm
+                #         - GELUActivation
+                #       post_oneshot_calibration: true
+                #       scheme_overrides:
+                #         # Enable channelwise quantization for better accuracy
+                #         Linear:
+                #           weights:
+                #             num_bits: 8
+                #             symmetric: true
+                #             strategy: channel
+                #         # For the embeddings, only weight-quantization makes sense
+                #         Embedding:
+                #           input_activations: null
+                #           weights:
+                #             num_bits: 8
+                #             symmetric: false
+                # """
+
+                model = sparseml.transformers.SparseAutoModelForCausalLM.from_pretrained(
+                    model_path, device_map="auto")
+
                 sparseml.transformers.oneshot(
-                    model=model_path,
+                    model=model,
                     dataset=ds,
                     recipe=recipe,
                     output_dir=compress_model_path,
@@ -1713,7 +1758,7 @@ spec:
             pipelines.kubeflow.org/cache_enabled: "true"
           annotations:
             pipelines.kubeflow.org/component_spec_digest: '{"name": "Quantize cpu
-              model", "outputs": [], "version": "Quantize cpu model@sha256=9585aac60cdd2ff6884077f2a87b137fa37e22307cc6073f484a01dca23ded3e"}'
+              model", "outputs": [], "version": "Quantize cpu model@sha256=febc6971fd90f021f8ca9c5c4e64b4323fc7e279b20bfa2a3a0d1f7b4d72dd6d"}'
       when:
       - input: $(tasks.condition-20.results.outcome)
         operator: in
@@ -1721,8 +1766,7 @@ spec:
         - "true"
       runAfter:
       - download-model
-      timeout: 5h
-    - name: eval-model-5
+    - name: cpu-eval-model-3
       params:
       - name: eval_batch_size
         value: $(params.eval_batch_size)
@@ -1754,7 +1798,7 @@ spec:
             printf "%s" "$0" > "$program_path"
             python3 -u "$program_path" "$@"
           - |
-            def eval_model(model_path, tasks, batch_size):
+            def cpu_eval_model(model_path, tasks, batch_size):
                 import subprocess
                 import os
 
@@ -1771,8 +1815,7 @@ spec:
                                          "--no_cache",
                                          "--write_out",
                                          "--device", "cuda:0",
-                                         "--num_fewshot", "0",
-                                         "--limit", "1000"],
+                                         "--num_fewshot", "0"],
                                         capture_output=True, text=True, env=env)
 
                 # Check for errors or output
@@ -1784,13 +1827,13 @@ spec:
                     print(result.stderr)
 
             import argparse
-            _parser = argparse.ArgumentParser(prog='Eval model', description='')
+            _parser = argparse.ArgumentParser(prog='Cpu eval model', description='')
             _parser.add_argument("--model-path", dest="model_path", type=str, required=True, default=argparse.SUPPRESS)
             _parser.add_argument("--tasks", dest="tasks", type=str, required=True, default=argparse.SUPPRESS)
             _parser.add_argument("--batch-size", dest="batch_size", type=str, required=True, default=argparse.SUPPRESS)
             _parsed_args = vars(_parser.parse_args())
 
-            _outputs = eval_model(**_parsed_args)
+            _outputs = cpu_eval_model(**_parsed_args)
           image: quay.io/ltomasbo/neural-magic:sparseml_eval
           resources:
             limits:
@@ -1812,8 +1855,8 @@ spec:
           labels:
             pipelines.kubeflow.org/cache_enabled: "true"
           annotations:
-            pipelines.kubeflow.org/component_spec_digest: '{"name": "Eval model",
-              "outputs": [], "version": "Eval model@sha256=a186d2e13ef9ab5e6b2a1bf4df6a587645a009d33811e5dd916de5329715af88"}'
+            pipelines.kubeflow.org/component_spec_digest: '{"name": "Cpu eval model",
+              "outputs": [], "version": "Cpu eval model@sha256=10ccd3939ac2aae488c6d93c21983fb933ccec164aebaf42bbbf8cb0b464da87"}'
       when:
       - input: $(tasks.condition-21.results.outcome)
         operator: in
@@ -1825,7 +1868,6 @@ spec:
         - "true"
       runAfter:
       - quantize-cpu-model-2
-      timeout: 5h
     - name: export-model-3
       params:
       - name: shared_volume
@@ -1886,7 +1928,6 @@ spec:
         - "true"
       runAfter:
       - quantize-cpu-model-2
-      timeout: 5h
     - name: upload-model-5
       params:
       - name: save_folder_name
@@ -1999,7 +2040,7 @@ spec:
         - "true"
       runAfter:
       - export-model-3
-    - name: eval-model-6
+    - name: cpu-eval-model-4
       params:
       - name: eval_batch_size
         value: $(params.eval_batch_size)
@@ -2031,7 +2072,7 @@ spec:
             printf "%s" "$0" > "$program_path"
             python3 -u "$program_path" "$@"
           - |
-            def eval_model(model_path, tasks, batch_size):
+            def cpu_eval_model(model_path, tasks, batch_size):
                 import subprocess
                 import os
 
@@ -2048,8 +2089,7 @@ spec:
                                          "--no_cache",
                                          "--write_out",
                                          "--device", "cuda:0",
-                                         "--num_fewshot", "0",
-                                         "--limit", "1000"],
+                                         "--num_fewshot", "0"],
                                         capture_output=True, text=True, env=env)
 
                 # Check for errors or output
@@ -2061,13 +2101,13 @@ spec:
                     print(result.stderr)
 
             import argparse
-            _parser = argparse.ArgumentParser(prog='Eval model', description='')
+            _parser = argparse.ArgumentParser(prog='Cpu eval model', description='')
             _parser.add_argument("--model-path", dest="model_path", type=str, required=True, default=argparse.SUPPRESS)
             _parser.add_argument("--tasks", dest="tasks", type=str, required=True, default=argparse.SUPPRESS)
             _parser.add_argument("--batch-size", dest="batch_size", type=str, required=True, default=argparse.SUPPRESS)
             _parsed_args = vars(_parser.parse_args())
 
-            _outputs = eval_model(**_parsed_args)
+            _outputs = cpu_eval_model(**_parsed_args)
           image: quay.io/ltomasbo/neural-magic:sparseml_eval
           resources:
             limits:
@@ -2089,8 +2129,8 @@ spec:
           labels:
             pipelines.kubeflow.org/cache_enabled: "true"
           annotations:
-            pipelines.kubeflow.org/component_spec_digest: '{"name": "Eval model",
-              "outputs": [], "version": "Eval model@sha256=a186d2e13ef9ab5e6b2a1bf4df6a587645a009d33811e5dd916de5329715af88"}'
+            pipelines.kubeflow.org/component_spec_digest: '{"name": "Cpu eval model",
+              "outputs": [], "version": "Cpu eval model@sha256=10ccd3939ac2aae488c6d93c21983fb933ccec164aebaf42bbbf8cb0b464da87"}'
       when:
       - input: $(tasks.condition-25.results.outcome)
         operator: in
@@ -2098,7 +2138,6 @@ spec:
         - "true"
       runAfter:
       - download-model
-      timeout: 5h
     - name: export-model-4
       params:
       - name: shared_volume
@@ -2159,7 +2198,6 @@ spec:
         - "true"
       runAfter:
       - download-model
-      timeout: 5h
     - name: upload-model-6
       params:
       - name: save_folder_name
@@ -2290,10 +2328,9 @@ spec:
           - sh
           - -c
           - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
-            'datasets' 'auto-gptq==0.7.1' 'torch==2.2.1' 'sentencepiece' 'protobuf'
-            || PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
-            'datasets' 'auto-gptq==0.7.1' 'torch==2.2.1' 'sentencepiece' 'protobuf'
-            --user) && "$0" "$@"
+            'datasets' 'auto-gptq==0.7.1' 'torch==2.2.1' 'sentencepiece' || PIP_DISABLE_PIP_VERSION_CHECK=1
+            python3 -m pip install --quiet --no-warn-script-location 'datasets' 'auto-gptq==0.7.1'
+            'torch==2.2.1' 'sentencepiece' --user) && "$0" "$@"
           - sh
           - -ec
           - |
@@ -2393,7 +2430,7 @@ spec:
             pipelines.kubeflow.org/cache_enabled: "true"
           annotations:
             pipelines.kubeflow.org/component_spec_digest: '{"name": "Quantize gpu
-              model", "outputs": [], "version": "Quantize gpu model@sha256=0c270db531779f120e2b06f1e82a11c3b3584627ee8d1adbb67d928db8a37dc5"}'
+              model", "outputs": [], "version": "Quantize gpu model@sha256=d89b8dd0ea6c502c43334d592bea5737b7f98a12a9fd01dc280ec1b7c176ddd7"}'
       when:
       - input: $(tasks.condition-28.results.outcome)
         operator: in
@@ -2401,8 +2438,7 @@ spec:
         - "true"
       runAfter:
       - download-model
-      timeout: 5h
-    - name: eval-model-7
+    - name: gpu-eval-model-3
       params:
       - name: eval_batch_size
         value: $(params.eval_batch_size)
@@ -2420,13 +2456,9 @@ spec:
           - $(inputs.params.eval_task)
           - --batch-size
           - $(inputs.params.eval_batch_size)
+          - --sparse
+          - "False"
           command:
-          - sh
-          - -c
-          - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
-            'datasets' 'auto-gptq' 'optimum' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3
-            -m pip install --quiet --no-warn-script-location 'datasets' 'auto-gptq'
-            'optimum' --user) && "$0" "$@"
           - sh
           - -ec
           - |
@@ -2434,25 +2466,25 @@ spec:
             printf "%s" "$0" > "$program_path"
             python3 -u "$program_path" "$@"
           - |
-            def eval_model(model_path, tasks, batch_size):
+            def gpu_eval_model(model_path, tasks, batch_size, sparse=False):
                 import subprocess
                 import os
 
-                model_args = "pretrained=" + model_path  # + ",trust_remote_code=True"
+                if sparse:
+                    model_args = "pretrained=" + model_path + ",sparsity=sparse_w16a16"  # + ",trust_remote_code=True"
+                else:
+                    model_args = "pretrained=" + model_path  + ",tensor_parallel_size=1"  # + ",trust_remote_code=True"
 
                 # Execute the huggingface_hub-cli command
                 env = os.environ.copy()
                 env["CUDA_VISIBLE_DEVICES"] = "0"
-                result = subprocess.run(["python", "./lm-evaluation-harness/main.py",
-                                         "--model", "sparseml",
+                result = subprocess.run(["lm_eval",
+                                         "--model", "vllm",
                                          "--model_args", model_args,
                                          "--tasks", tasks,
                                          "--batch_size", batch_size,
-                                         "--no_cache",
                                          "--write_out",
-                                         "--device", "cuda:0",
-                                         "--num_fewshot", "0",
-                                         "--limit", "1000"],
+                                         "--num_fewshot", "0"],
                                         capture_output=True, text=True, env=env)
 
                 # Check for errors or output
@@ -2463,15 +2495,20 @@ spec:
                     print("Error evaluating the model:")
                     print(result.stderr)
 
+            def _deserialize_bool(s) -> bool:
+                from distutils.util import strtobool
+                return strtobool(s) == 1
+
             import argparse
-            _parser = argparse.ArgumentParser(prog='Eval model', description='')
+            _parser = argparse.ArgumentParser(prog='Gpu eval model', description='')
             _parser.add_argument("--model-path", dest="model_path", type=str, required=True, default=argparse.SUPPRESS)
             _parser.add_argument("--tasks", dest="tasks", type=str, required=True, default=argparse.SUPPRESS)
             _parser.add_argument("--batch-size", dest="batch_size", type=str, required=True, default=argparse.SUPPRESS)
+            _parser.add_argument("--sparse", dest="sparse", type=_deserialize_bool, required=False, default=argparse.SUPPRESS)
             _parsed_args = vars(_parser.parse_args())
 
-            _outputs = eval_model(**_parsed_args)
-          image: quay.io/ltomasbo/neural-magic:sparseml_eval
+            _outputs = gpu_eval_model(**_parsed_args)
+          image: quay.io/ltomasbo/neural-magic:nm_vllm_eval
           resources:
             limits:
               nvidia.com/gpu: '1'
@@ -2492,8 +2529,8 @@ spec:
           labels:
             pipelines.kubeflow.org/cache_enabled: "true"
           annotations:
-            pipelines.kubeflow.org/component_spec_digest: '{"name": "Eval model",
-              "outputs": [], "version": "Eval model@sha256=a186d2e13ef9ab5e6b2a1bf4df6a587645a009d33811e5dd916de5329715af88"}'
+            pipelines.kubeflow.org/component_spec_digest: '{"name": "Gpu eval model",
+              "outputs": [], "version": "Gpu eval model@sha256=302fd465fe5e2cb95ed215d256c1b9b7af65e80796a30568a9bd74b2a534a34c"}'
       when:
       - input: $(tasks.condition-29.results.outcome)
         operator: in
@@ -2505,7 +2542,6 @@ spec:
         - "true"
       runAfter:
       - quantize-gpu-model-2
-      timeout: 5h
     - name: upload-model-7
       params:
       - name: save_folder_name
@@ -2618,7 +2654,7 @@ spec:
         - "true"
       runAfter:
       - quantize-gpu-model-2
-    - name: eval-model-8
+    - name: gpu-eval-model-4
       params:
       - name: eval_batch_size
         value: $(params.eval_batch_size)
@@ -2626,6 +2662,8 @@ spec:
         value: $(params.eval_task)
       - name: shared_volume
         value: $(params.shared_volume)
+      - name: sparse
+        value: $(params.sparse)
       taskSpec:
         steps:
         - name: main
@@ -2636,13 +2674,9 @@ spec:
           - $(inputs.params.eval_task)
           - --batch-size
           - $(inputs.params.eval_batch_size)
+          - --sparse
+          - $(inputs.params.sparse)
           command:
-          - sh
-          - -c
-          - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
-            'datasets' 'auto-gptq' 'optimum' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3
-            -m pip install --quiet --no-warn-script-location 'datasets' 'auto-gptq'
-            'optimum' --user) && "$0" "$@"
           - sh
           - -ec
           - |
@@ -2650,25 +2684,25 @@ spec:
             printf "%s" "$0" > "$program_path"
             python3 -u "$program_path" "$@"
           - |
-            def eval_model(model_path, tasks, batch_size):
+            def gpu_eval_model(model_path, tasks, batch_size, sparse=False):
                 import subprocess
                 import os
 
-                model_args = "pretrained=" + model_path  # + ",trust_remote_code=True"
+                if sparse:
+                    model_args = "pretrained=" + model_path + ",sparsity=sparse_w16a16"  # + ",trust_remote_code=True"
+                else:
+                    model_args = "pretrained=" + model_path  + ",tensor_parallel_size=1"  # + ",trust_remote_code=True"
 
                 # Execute the huggingface_hub-cli command
                 env = os.environ.copy()
                 env["CUDA_VISIBLE_DEVICES"] = "0"
-                result = subprocess.run(["python", "./lm-evaluation-harness/main.py",
-                                         "--model", "sparseml",
+                result = subprocess.run(["lm_eval",
+                                         "--model", "vllm",
                                          "--model_args", model_args,
                                          "--tasks", tasks,
                                          "--batch_size", batch_size,
-                                         "--no_cache",
                                          "--write_out",
-                                         "--device", "cuda:0",
-                                         "--num_fewshot", "0",
-                                         "--limit", "1000"],
+                                         "--num_fewshot", "0"],
                                         capture_output=True, text=True, env=env)
 
                 # Check for errors or output
@@ -2679,15 +2713,20 @@ spec:
                     print("Error evaluating the model:")
                     print(result.stderr)
 
+            def _deserialize_bool(s) -> bool:
+                from distutils.util import strtobool
+                return strtobool(s) == 1
+
             import argparse
-            _parser = argparse.ArgumentParser(prog='Eval model', description='')
+            _parser = argparse.ArgumentParser(prog='Gpu eval model', description='')
             _parser.add_argument("--model-path", dest="model_path", type=str, required=True, default=argparse.SUPPRESS)
             _parser.add_argument("--tasks", dest="tasks", type=str, required=True, default=argparse.SUPPRESS)
             _parser.add_argument("--batch-size", dest="batch_size", type=str, required=True, default=argparse.SUPPRESS)
+            _parser.add_argument("--sparse", dest="sparse", type=_deserialize_bool, required=False, default=argparse.SUPPRESS)
             _parsed_args = vars(_parser.parse_args())
 
-            _outputs = eval_model(**_parsed_args)
-          image: quay.io/ltomasbo/neural-magic:sparseml_eval
+            _outputs = gpu_eval_model(**_parsed_args)
+          image: quay.io/ltomasbo/neural-magic:nm_vllm_eval
           resources:
             limits:
               nvidia.com/gpu: '1'
@@ -2700,6 +2739,7 @@ spec:
         - name: eval_batch_size
         - name: eval_task
         - name: shared_volume
+        - name: sparse
         volumes:
         - name: models-shared
           persistentVolumeClaim:
@@ -2708,8 +2748,8 @@ spec:
           labels:
             pipelines.kubeflow.org/cache_enabled: "true"
           annotations:
-            pipelines.kubeflow.org/component_spec_digest: '{"name": "Eval model",
-              "outputs": [], "version": "Eval model@sha256=a186d2e13ef9ab5e6b2a1bf4df6a587645a009d33811e5dd916de5329715af88"}'
+            pipelines.kubeflow.org/component_spec_digest: '{"name": "Gpu eval model",
+              "outputs": [], "version": "Gpu eval model@sha256=302fd465fe5e2cb95ed215d256c1b9b7af65e80796a30568a9bd74b2a534a34c"}'
       when:
       - input: $(tasks.condition-33.results.outcome)
         operator: in
@@ -2717,7 +2757,6 @@ spec:
         - "true"
       runAfter:
       - download-model
-      timeout: 5h
     - name: upload-model-8
       params:
       - name: save_folder_name
@@ -2826,7 +2865,7 @@ spec:
         - "true"
       runAfter:
       - download-model
-    - name: eval-model-9
+    - name: gpu-eval-model-5
       params:
       - name: eval_batch_size
         value: $(params.eval_batch_size)
@@ -2844,13 +2883,9 @@ spec:
           - $(inputs.params.eval_task)
           - --batch-size
           - $(inputs.params.eval_batch_size)
+          - --sparse
+          - "False"
           command:
-          - sh
-          - -c
-          - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
-            'datasets' 'auto-gptq' 'optimum' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3
-            -m pip install --quiet --no-warn-script-location 'datasets' 'auto-gptq'
-            'optimum' --user) && "$0" "$@"
           - sh
           - -ec
           - |
@@ -2858,25 +2893,25 @@ spec:
             printf "%s" "$0" > "$program_path"
             python3 -u "$program_path" "$@"
           - |
-            def eval_model(model_path, tasks, batch_size):
+            def gpu_eval_model(model_path, tasks, batch_size, sparse=False):
                 import subprocess
                 import os
 
-                model_args = "pretrained=" + model_path  # + ",trust_remote_code=True"
+                if sparse:
+                    model_args = "pretrained=" + model_path + ",sparsity=sparse_w16a16"  # + ",trust_remote_code=True"
+                else:
+                    model_args = "pretrained=" + model_path  + ",tensor_parallel_size=1"  # + ",trust_remote_code=True"
 
                 # Execute the huggingface_hub-cli command
                 env = os.environ.copy()
                 env["CUDA_VISIBLE_DEVICES"] = "0"
-                result = subprocess.run(["python", "./lm-evaluation-harness/main.py",
-                                         "--model", "sparseml",
+                result = subprocess.run(["lm_eval",
+                                         "--model", "vllm",
                                          "--model_args", model_args,
                                          "--tasks", tasks,
                                          "--batch_size", batch_size,
-                                         "--no_cache",
                                          "--write_out",
-                                         "--device", "cuda:0",
-                                         "--num_fewshot", "0",
-                                         "--limit", "1000"],
+                                         "--num_fewshot", "0"],
                                         capture_output=True, text=True, env=env)
 
                 # Check for errors or output
@@ -2887,15 +2922,20 @@ spec:
                     print("Error evaluating the model:")
                     print(result.stderr)
 
+            def _deserialize_bool(s) -> bool:
+                from distutils.util import strtobool
+                return strtobool(s) == 1
+
             import argparse
-            _parser = argparse.ArgumentParser(prog='Eval model', description='')
+            _parser = argparse.ArgumentParser(prog='Gpu eval model', description='')
             _parser.add_argument("--model-path", dest="model_path", type=str, required=True, default=argparse.SUPPRESS)
             _parser.add_argument("--tasks", dest="tasks", type=str, required=True, default=argparse.SUPPRESS)
             _parser.add_argument("--batch-size", dest="batch_size", type=str, required=True, default=argparse.SUPPRESS)
+            _parser.add_argument("--sparse", dest="sparse", type=_deserialize_bool, required=False, default=argparse.SUPPRESS)
             _parsed_args = vars(_parser.parse_args())
 
-            _outputs = eval_model(**_parsed_args)
-          image: quay.io/ltomasbo/neural-magic:sparseml_eval
+            _outputs = gpu_eval_model(**_parsed_args)
+          image: quay.io/ltomasbo/neural-magic:nm_vllm_eval
           resources:
             limits:
               nvidia.com/gpu: '1'
@@ -2916,8 +2956,8 @@ spec:
           labels:
             pipelines.kubeflow.org/cache_enabled: "true"
           annotations:
-            pipelines.kubeflow.org/component_spec_digest: '{"name": "Eval model",
-              "outputs": [], "version": "Eval model@sha256=a186d2e13ef9ab5e6b2a1bf4df6a587645a009d33811e5dd916de5329715af88"}'
+            pipelines.kubeflow.org/component_spec_digest: '{"name": "Gpu eval model",
+              "outputs": [], "version": "Gpu eval model@sha256=302fd465fe5e2cb95ed215d256c1b9b7af65e80796a30568a9bd74b2a534a34c"}'
       when:
       - input: $(tasks.condition-35.results.outcome)
         operator: in
@@ -2925,7 +2965,6 @@ spec:
         - "true"
       runAfter:
       - download-model
-      timeout: 5h
     - name: condition-1
       params:
       - name: operand1
@@ -4564,7 +4603,7 @@ spec:
         value: "true"
       nodeSelector:
         nvidia.com/gpu.present: "true"
-  - pipelineTaskName: eval-model
+  - pipelineTaskName: cpu-eval-model
     podTemplate:
       tolerations:
       - effect: NoSchedule
@@ -4573,7 +4612,7 @@ spec:
         value: "true"
       nodeSelector:
         nvidia.com/gpu.present: "true"
-  - pipelineTaskName: eval-model-2
+  - pipelineTaskName: cpu-eval-model-2
     podTemplate:
       tolerations:
       - effect: NoSchedule
@@ -4591,7 +4630,7 @@ spec:
         value: "true"
       nodeSelector:
         nvidia.com/gpu.present: "true"
-  - pipelineTaskName: eval-model-3
+  - pipelineTaskName: gpu-eval-model
     podTemplate:
       tolerations:
       - effect: NoSchedule
@@ -4600,7 +4639,7 @@ spec:
         value: "true"
       nodeSelector:
         nvidia.com/gpu.present: "true"
-  - pipelineTaskName: eval-model-4
+  - pipelineTaskName: gpu-eval-model-2
     podTemplate:
       tolerations:
       - effect: NoSchedule
@@ -4618,7 +4657,7 @@ spec:
         value: "true"
       nodeSelector:
         nvidia.com/gpu.present: "true"
-  - pipelineTaskName: eval-model-5
+  - pipelineTaskName: cpu-eval-model-3
     podTemplate:
       tolerations:
       - effect: NoSchedule
@@ -4627,7 +4666,7 @@ spec:
         value: "true"
       nodeSelector:
         nvidia.com/gpu.present: "true"
-  - pipelineTaskName: eval-model-6
+  - pipelineTaskName: cpu-eval-model-4
     podTemplate:
       tolerations:
       - effect: NoSchedule
@@ -4645,7 +4684,7 @@ spec:
         value: "true"
       nodeSelector:
         nvidia.com/gpu.present: "true"
-  - pipelineTaskName: eval-model-7
+  - pipelineTaskName: gpu-eval-model-3
     podTemplate:
       tolerations:
       - effect: NoSchedule
@@ -4654,7 +4693,7 @@ spec:
         value: "true"
       nodeSelector:
         nvidia.com/gpu.present: "true"
-  - pipelineTaskName: eval-model-8
+  - pipelineTaskName: gpu-eval-model-4
     podTemplate:
       tolerations:
       - effect: NoSchedule
@@ -4663,7 +4702,7 @@ spec:
         value: "true"
       nodeSelector:
         nvidia.com/gpu.present: "true"
-  - pipelineTaskName: eval-model-9
+  - pipelineTaskName: gpu-eval-model-5
     podTemplate:
       tolerations:
       - effect: NoSchedule

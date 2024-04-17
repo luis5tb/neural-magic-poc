@@ -46,6 +46,7 @@ Build the container for the sparsification and the evaluation steps:
 ```bash
 podman build -t quay.io/USER/neural-magic:sparseml -f openshift-ai/sparseml_Dockerfile .
 podman build -t quay.io/USER/neural-magic:sparseml_eval -f openshift-ai/sparseml_eval_Dockerfile .
+podman build -t quay.io/USER/neural-magic:nm_vllm_eval -f openshift-ai/nm_vllm_eval_Dockerfile .
 ```
 
 And push them to a registry
@@ -53,6 +54,7 @@ And push them to a registry
 ```bash
 podman push quay.io/USER/neural-magic:sparseml
 podman push quay.io/USER/neural-magic:sparseml_eval
+podman push quay.io/USER/neural-magic:nm_vllm_eval
 ```
 
 ### Run the pipeline
