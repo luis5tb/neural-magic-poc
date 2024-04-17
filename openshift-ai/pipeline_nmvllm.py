@@ -116,12 +116,6 @@ def quantize_cpu_model(model_path:str, compress_model_path: str, ds: str):
             - SiLUActivation
             - MatMulOutput_QK
             - MatMulOutput_PV
-            # Skip quantizing the layers with the most sensitive activations
-            #- model.layers.21.mlp.down_proj
-            #- model.layers.7.mlp.down_proj
-            #- model.layers.2.mlp.down_proj
-            #- model.layers.8.self_attn.q_proj
-            #- model.layers.8.self_attn.k_proj
           post_oneshot_calibration: true
           scheme_overrides:
             # Enable channelwise quantization for better accuracy
@@ -142,8 +136,40 @@ def quantize_cpu_model(model_path:str, compress_model_path: str, ds: str):
                 symmetric: false
     """
 
+    # recipe = """
+    # test_stage:
+    #   obcq_modifiers:
+    #     LogarithmicEqualizationModifier:
+    #       mappings: [
+    #         [["re:.*c_proj"], ["re:.*ln_1", "re:.*ln_2"]],
+    #         [["re:.*c_fc"], []],
+    #       ]
+    #     QuantizationModifier:
+    #       ignore:
+    #         # These operations don't make sense to quantize
+    #         - LayerNorm
+    #         - GELUActivation
+    #       post_oneshot_calibration: true
+    #       scheme_overrides:
+    #         # Enable channelwise quantization for better accuracy
+    #         Linear:
+    #           weights:
+    #             num_bits: 8
+    #             symmetric: true
+    #             strategy: channel
+    #         # For the embeddings, only weight-quantization makes sense
+    #         Embedding:
+    #           input_activations: null
+    #           weights:
+    #             num_bits: 8
+    #             symmetric: false
+    # """
+
+    model = sparseml.transformers.SparseAutoModelForCausalLM.from_pretrained(
+        model_path, device_map="auto")
+
     sparseml.transformers.oneshot(
-        model=model_path,
+        model=model,
         dataset=ds,
         recipe=recipe,
         output_dir=compress_model_path,
