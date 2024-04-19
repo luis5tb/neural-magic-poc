@@ -192,6 +192,7 @@ def quantize_gpu_model(model_path:str, compress_model_path: str, ds: str):
     print("Loading the dataset and tokenizers")
     dataset = load_dataset(ds, split="train_sft")
     #dataset = load_dataset(ds, split="train")
+    #dataset = load_dataset(ds, split="test")
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     ds = dataset.shuffle().select(range(NUM_EXAMPLES))
     ds = ds.map(preprocess)
@@ -357,7 +358,7 @@ export_op = comp.create_component_from_func(export_model,
                                             base_image='quay.io/ltomasbo/neural-magic:sparseml')
 #                                            base_image='quay.io/ltomasbo/sparseml')
 cpu_eval_op = comp.create_component_from_func(cpu_eval_model,
-                                          packages_to_install=["datasets", "auto-gptq", "optimum"],
+                                          packages_to_install=[],
                                           base_image='quay.io/ltomasbo/neural-magic:sparseml_eval')
 #                                          base_image='quay.io/ltomasbo/sparseml:eval2')
 gpu_eval_op = comp.create_component_from_func(gpu_eval_model,
@@ -378,10 +379,13 @@ def cpu_model_optimization(predecing_task:object, model_path:str,
     export_llm = None
     upload_pruned_llm = None
 
+    #ds = "openai_humaneval"
+    ds = "open_platypus"
+
     with dsl.Condition(quantize == True):
         quant_llm = quant_cpu_op(model_path=model_path,
                                  compress_model_path=QUANT_MODEL_DIR,
-                                 ds="open_platypus")
+                                 ds=ds)
         quant_llm.add_pvolumes({"/mnt/models": vol})
         quant_llm.add_node_selector_constraint(
             label_name='nvidia.com/gpu.present', value='true')
@@ -463,11 +467,14 @@ def gpu_model_optimization(predecing_task:object, model_path:str,
     quant_llm = None
     upload_pruned_llm = None
 
+    #ds = "openai_humaneval"
+    ds = "HuggingFaceH4/ultrachat_200k"
+    #ds = "garage-bAInd/Open-Platypus"
+
     with dsl.Condition(quantize == True):
         quant_llm = quant_gpu_op(model_path=model_path,
                                  compress_model_path=QUANT_MODEL_DIR,
-                                 ds="HuggingFaceH4/ultrachat_200k")
-                                 #ds="garage-bAInd/Open-Platypus")
+                                 ds=ds)
         quant_llm.add_pvolumes({"/mnt/models": vol})
         quant_llm.add_node_selector_constraint(
             label_name='nvidia.com/gpu.present', value='true')
@@ -544,7 +551,7 @@ def sparseml_pipeline(
     shared_volume:str='models-shared',
     sparse:bool=True,
     sparsity_ratio:float=0.5,
-    sparsity_targets:str='["re:model.layers.\\d*$"]',  #  ["re:transformer.h.\\d*$"]
+    sparsity_targets:str='["re:model.layers.\\\\d*$"]',  #  ["re:transformer.h.\\d*$"]
     quantize:bool=True,
     eval:bool=False,
     eval_task:str="hellaswag",
@@ -556,6 +563,9 @@ def sparseml_pipeline(
     ONE_HOUR_SEC = 60 * 60
     ONE_DAY_SEC = ONE_HOUR_SEC * 24
     ONE_WEEK_SEC = ONE_DAY_SEC * 7
+
+    #ds = "openai_humaneval"
+    ds = "open_platypus"
 
     # Configure the pipeline level to one week (in seconds)
     dsl.get_pipeline_conf().set_timeout(ONE_WEEK_SEC)
@@ -592,15 +602,15 @@ def sparseml_pipeline(
     with dsl.Condition(sparse == True):
         sparse_llm = sparse_op(model_path=MODEL_DIR,
                                compress_model_path=SPARSE_MODEL_DIR,
-                               ds="open_platypus",
+                               ds=ds,
                                sparsity_ratio=sparsity_ratio,
                                sparsity_targets=sparsity_targets)
         sparse_llm.add_pvolumes({"/mnt/models": vol})
         sparse_llm.add_node_selector_constraint(
             label_name='nvidia.com/gpu.present', value='true')
         sparse_llm.add_toleration(gpu_toleration)
-        sparse_llm.add_resource_request('nvidia.com/gpu', "4")
-        sparse_llm.add_resource_limit('nvidia.com/gpu', "4")
+        sparse_llm.add_resource_request('nvidia.com/gpu', "3")
+        sparse_llm.add_resource_limit('nvidia.com/gpu', "3")
         sparse_llm.after(download_llm)
 
         with dsl.Condition(inference_target == 'CPU'):
@@ -627,15 +637,26 @@ def sparseml_pipeline(
                                    gpu_toleration)
             
     with dsl.Condition(eval == True):
-        eval_llm_base = gpu_eval_op(model_path=MODEL_DIR, tasks=eval_task,
-                                    batch_size=eval_batch_size)
-        eval_llm_base.add_pvolumes({"/mnt/models": vol})
-        eval_llm_base.add_node_selector_constraint(
-            label_name='nvidia.com/gpu.present', value='true')
-        eval_llm_base.add_toleration(gpu_toleration)
-        eval_llm_base.add_resource_request('nvidia.com/gpu', "1")
-        eval_llm_base.add_resource_limit('nvidia.com/gpu', "1")
-        eval_llm_base.after(download_llm)
+        with dsl.Condition(inference_target == 'CPU'):
+            eval_llm_base = cpu_eval_op(model_path=MODEL_DIR, tasks=eval_task,
+                                        batch_size=eval_batch_size)
+            eval_llm_base.add_pvolumes({"/mnt/models": vol})
+            eval_llm_base.add_node_selector_constraint(
+                label_name='nvidia.com/gpu.present', value='true')
+            eval_llm_base.add_toleration(gpu_toleration)
+            eval_llm_base.add_resource_request('nvidia.com/gpu', "1")
+            eval_llm_base.add_resource_limit('nvidia.com/gpu', "1")
+            eval_llm_base.after(download_llm)
+        with dsl.Condition(inference_target == 'GPU'):
+            eval_llm_base = gpu_eval_op(model_path=MODEL_DIR, tasks=eval_task,
+                                        batch_size=eval_batch_size)
+            eval_llm_base.add_pvolumes({"/mnt/models": vol})
+            eval_llm_base.add_node_selector_constraint(
+                label_name='nvidia.com/gpu.present', value='true')
+            eval_llm_base.add_toleration(gpu_toleration)
+            eval_llm_base.add_resource_request('nvidia.com/gpu', "1")
+            eval_llm_base.add_resource_limit('nvidia.com/gpu', "1")
+            eval_llm_base.after(download_llm)
 
 # Compile the pipeline
-TektonCompiler().compile(sparseml_pipeline, 'sparseml_pipeline_nmvllm.yaml')
+TektonCompiler().compile(sparseml_pipeline, 'sparseml_pipeline.yaml')
