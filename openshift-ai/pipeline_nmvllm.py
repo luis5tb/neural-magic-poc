@@ -580,8 +580,9 @@ def sparseml_pipeline(
 
     gpu_toleration = V1Toleration(effect='NoSchedule',
                                   key='nvidia.com/gpu',
-                                  operator='Equal',
-                                  value='true')
+                                  operator='Exists')
+                                  #operator='Equal',
+                                  #value='true')
 
     # Download volumes
     download_llm = download_op(model_name, destination_path=MODEL_DIR,
