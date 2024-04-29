@@ -1,0 +1,3 @@
+FROM registry.access.redhat.com/ubi9/python-39
+
+RUN pip install git+https://github.com/EleutherAI/lm-evaluation-harness.git@7852985

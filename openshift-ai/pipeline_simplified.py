@@ -34,7 +34,7 @@ def download_model(model_name: str, destination_path: str,
         from boto3 import client
 
         print('Starting downloading the model from S3')
- 
+
         s3_endpoint_url = os.environ["s3_host"]
         s3_access_key = os.environ["s3_access_key"]
         s3_secret_key = os.environ["s3_secret_access_key"]
@@ -62,7 +62,7 @@ def download_model(model_name: str, destination_path: str,
             s3_client.download_file(s3_bucket_name, file_name, local_file_name)
 
         print('Model downloaded successfully from S3.')
-    
+
     elif download_option == "PVC":
         print('Model should be already on the volumen.')
 
@@ -95,6 +95,33 @@ def upload_model(model_path: str, name: str):
             print(f'Uploaded {local_file_path}')
 
     print('Finished uploading results.')
+
+
+def base_eval_model(model_path: str, tasks: str, batch_size: str):
+    import subprocess
+    import os
+
+    model_args = "pretrained=" + model_path  # + ",trust_remote_code=True"
+
+    # Execute the huggingface_hub-cli command
+    env = os.environ.copy()
+    env["CUDA_VISIBLE_DEVICES"] = "0"
+    result = subprocess.run(["lm_eval",
+                             "--model", "hf",
+                             "--model_args", model_args,
+                             "--tasks", tasks,
+                             "--batch_size", batch_size,
+                             "--write_out",
+                             "--num_fewshot", "0"],
+                            capture_output=True, text=True, env=env)
+
+    # Check for errors or output
+    if result.returncode == 0:
+        print("Model evaluated successfully:")
+        print(result.stdout)
+    else:
+        print("Error evaluating the model:")
+        print(result.stderr)
 
 
 def cpu_eval_model(model_path: str, tasks: str, batch_size: str):
@@ -317,16 +344,6 @@ def cpu_model_optimization(predecing_task:object, sparsity_ratio:float,
     export_llm.after(sparse_llm)
 
     with dsl.Condition(eval == True):
-        eval_llm_base = cpu_eval_op(model_path=MODEL_DIR, tasks=eval_task,
-                                    batch_size=eval_batch_size)
-        eval_llm_base.add_pvolumes({"/mnt/models": vol})
-        eval_llm_base.add_node_selector_constraint(
-            label_name='nvidia.com/gpu.present', value='true')
-        eval_llm_base.add_toleration(gpu_toleration)
-        eval_llm_base.add_resource_request('nvidia.com/gpu', "1")
-        eval_llm_base.add_resource_limit('nvidia.com/gpu', "1")
-        eval_llm_base.after(predecing_task)
-
         eval_llm = cpu_eval_op(model_path=COMPRESS_MODEL_DIR, tasks=eval_task,
                                batch_size=eval_batch_size)
         eval_llm.add_pvolumes({"/mnt/models": vol})
@@ -370,16 +387,6 @@ def gpu_model_optimization(predecing_task:object, eval:bool, eval_task:str,
     quant_llm.after(predecing_task)
 
     with dsl.Condition(eval == True):
-        eval_llm_base = gpu_eval_op(model_path=MODEL_DIR, tasks=eval_task,
-                                    batch_size=eval_batch_size)
-        eval_llm_base.add_pvolumes({"/mnt/models": vol})
-        eval_llm_base.add_node_selector_constraint(
-            label_name='nvidia.com/gpu.present', value='true')
-        eval_llm_base.add_toleration(gpu_toleration)
-        eval_llm_base.add_resource_request('nvidia.com/gpu', "1")
-        eval_llm_base.add_resource_limit('nvidia.com/gpu', "1")
-        eval_llm_base.after(predecing_task)
-
         eval_llm = gpu_eval_op(model_path=COMPRESS_MODEL_DIR, tasks=eval_task,
                                batch_size=eval_batch_size)
         eval_llm.add_pvolumes({"/mnt/models": vol})
@@ -411,6 +418,9 @@ download_op = comp.create_component_from_func(download_model,
 upload_op = comp.create_component_from_func(upload_model,
                                             packages_to_install=["boto3"],
                                             base_image='registry.access.redhat.com/ubi9/python-311')
+base_eval_op = comp.create_component_from_func(base_eval_model,
+                                              packages_to_install=[],
+                                              base_image='quay.io/ltomasbo/neural-magic:base_eval')
 cpu_eval_op = comp.create_component_from_func(cpu_eval_model,
                                               packages_to_install=[],
                                               base_image='quay.io/ltomasbo/neural-magic:sparseml_eval')
@@ -439,7 +449,7 @@ def sparseml_pipeline(
     data_connection:str="models",
     shared_volume:str='models-shared',
     save_model:bool=True,
-    save_folder_name:str="optimized-1",   
+    save_folder_name:str="optimized-1",
     inference_target:str='CPU',  # CPU or GPU
     sparsity_ratio:float=0.5,
     sparsity_targets:str='["re:model.layers.\\\\d*$"]',  #  ["re:transformer.h.\\d*$"]
@@ -447,7 +457,7 @@ def sparseml_pipeline(
     eval_task:str="hellaswag",
     eval_batch_size:str="auto",  # 64
 ):
-    
+
     ONE_HOUR_SEC = 60 * 60
     ONE_DAY_SEC = ONE_HOUR_SEC * 24
     ONE_WEEK_SEC = ONE_DAY_SEC * 7
@@ -490,6 +500,17 @@ def sparseml_pipeline(
         gpu_model_optimization(download_llm, eval, eval_task, eval_batch_size,
                                save_model, save_folder_name, vol,
                                gpu_toleration, dc_secret)
+
+    with dsl.Condition(eval == True):
+        eval_llm_base = base_eval_op(model_path=MODEL_DIR, tasks=eval_task,
+                                     batch_size=eval_batch_size)
+        eval_llm_base.add_pvolumes({"/mnt/models": vol})
+        eval_llm_base.add_node_selector_constraint(
+            label_name='nvidia.com/gpu.present', value='true')
+        eval_llm_base.add_toleration(gpu_toleration)
+        eval_llm_base.add_resource_request('nvidia.com/gpu', "1")
+        eval_llm_base.add_resource_limit('nvidia.com/gpu', "1")
+        eval_llm_base.after(download_llm)
 
 
 # Compile the pipeline
