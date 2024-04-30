@@ -175,6 +175,8 @@ def gpu_eval_model(model_path: str, tasks: str, batch_size: str):
     if result.returncode == 0:
         print("Model evaluated successfully:")
         print(result.stdout)
+        MODEL_DIR = BASE_DIR + "llm"
+        COMPRESS_MODEL_DIR = BASE_DIR + "compress-llm"
         def get_path_size(start_path):
             total_size = 0
             for path, dirs, files in os.walk(start_path):
