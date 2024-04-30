@@ -399,6 +399,13 @@ spec:
 
             _outputs = export_model(**_parsed_args)
           image: quay.io/ltomasbo/neural-magic:sparseml
+          resources:
+            limits:
+              nvidia.com/gpu: '1'
+              memory: 32Gi
+            requests:
+              nvidia.com/gpu: '1'
+              memory: 32Gi
           volumeMounts:
           - mountPath: /mnt/models
             name: models-shared
@@ -998,26 +1005,41 @@ spec:
             program_path=$(mktemp)
             printf "%s" "$0" > "$program_path"
             python3 -u "$program_path" "$@"
-          - "def base_eval_model(model_path, tasks, batch_size):\n    import subprocess\n\
-            \    import os\n\n    model_args = \"pretrained=\" + model_path  # + \"\
-            ,trust_remote_code=True\"\n\n    # Execute the huggingface_hub-cli command\n\
-            \    env = os.environ.copy()\n    env[\"CUDA_VISIBLE_DEVICES\"] = \"0\"\
-            \n    result = subprocess.run([\"lm_eval\",\n                        \
-            \     \"--model\", \"hf\",\n                             \"--model_args\"\
-            , model_args,\n                             \"--tasks\", tasks,\n    \
-            \                         \"--batch_size\", batch_size,\n            \
-            \                 \"--write_out\",\n                             \"--num_fewshot\"\
-            , \"0\"],\n                            capture_output=True, text=True,\
-            \ env=env)\n\n    # Check for errors or output\n    if result.returncode\
-            \ == 0:\n        print(\"Model evaluated successfully:\")\n        print(result.stdout)\n\
-            \    else:\n        print(\"Error evaluating the model:\")\n        print(result.stderr)\
-            \    \n\nimport argparse\n_parser = argparse.ArgumentParser(prog='Base\
-            \ eval model', description='')\n_parser.add_argument(\"--model-path\"\
-            , dest=\"model_path\", type=str, required=True, default=argparse.SUPPRESS)\n\
-            _parser.add_argument(\"--tasks\", dest=\"tasks\", type=str, required=True,\
-            \ default=argparse.SUPPRESS)\n_parser.add_argument(\"--batch-size\", dest=\"\
-            batch_size\", type=str, required=True, default=argparse.SUPPRESS)\n_parsed_args\
-            \ = vars(_parser.parse_args())\n\n_outputs = base_eval_model(**_parsed_args)\n"
+          - |
+            def base_eval_model(model_path, tasks, batch_size):
+                import subprocess
+                import os
+
+                model_args = "pretrained=" + model_path  # + ",trust_remote_code=True"
+
+                # Execute the huggingface_hub-cli command
+                env = os.environ.copy()
+                env["CUDA_VISIBLE_DEVICES"] = "0"
+                result = subprocess.run(["lm_eval",
+                                         "--model", "hf",
+                                         "--model_args", model_args,
+                                         "--tasks", tasks,
+                                         "--batch_size", batch_size,
+                                         "--write_out",
+                                         "--num_fewshot", "0"],
+                                        capture_output=True, text=True, env=env)
+
+                # Check for errors or output
+                if result.returncode == 0:
+                    print("Model evaluated successfully:")
+                    print(result.stdout)
+                else:
+                    print("Error evaluating the model:")
+                    print(result.stderr)
+
+            import argparse
+            _parser = argparse.ArgumentParser(prog='Base eval model', description='')
+            _parser.add_argument("--model-path", dest="model_path", type=str, required=True, default=argparse.SUPPRESS)
+            _parser.add_argument("--tasks", dest="tasks", type=str, required=True, default=argparse.SUPPRESS)
+            _parser.add_argument("--batch-size", dest="batch_size", type=str, required=True, default=argparse.SUPPRESS)
+            _parsed_args = vars(_parser.parse_args())
+
+            _outputs = base_eval_model(**_parsed_args)
           image: quay.io/ltomasbo/neural-magic:base_eval
           resources:
             limits:
@@ -1040,7 +1062,7 @@ spec:
             pipelines.kubeflow.org/cache_enabled: "true"
           annotations:
             pipelines.kubeflow.org/component_spec_digest: '{"name": "Base eval model",
-              "outputs": [], "version": "Base eval model@sha256=0b15696e8456ac37ed0a86554fbebbbd2e3186c65f9bbf530395060d9de74420"}'
+              "outputs": [], "version": "Base eval model@sha256=7bfd1a318f211ce4287b03cfa08dd8ba6434d097b2634425a83581f92e11eaed"}'
       when:
       - input: $(tasks.condition-7.results.outcome)
         operator: in
