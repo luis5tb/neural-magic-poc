@@ -175,6 +175,21 @@ def gpu_eval_model(model_path: str, tasks: str, batch_size: str):
     if result.returncode == 0:
         print("Model evaluated successfully:")
         print(result.stdout)
+        def get_path_size(start_path):
+            total_size = 0
+            for path, dirs, files in os.walk(start_path):
+                for f in files:
+                    fp = os.path.join(path, f)
+                    total_size += os.path.getsize(fp)
+            return total_size
+
+        size_base = get_path_size(MODEL_DIR)
+        size_compress = get_path_size(COMPRESS_MODEL_DIR)
+        compression_ratio = 100*(1 - size_compress/size_base)
+
+        print(f"The base model size is: {size_base/1024/1024/1024} GB")
+        print(f"The optimized model size is: {size_compress/1024/1024/1024} GB")
+        print(f"The size reduction is: {compression_ratio}")
     else:
         print("Error evaluating the model:")
         print(result.stderr)

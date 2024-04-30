@@ -428,6 +428,7 @@ spec:
         - "true"
       runAfter:
       - sparse-cpu-model
+      timeout: 5h
     - name: cpu-eval-model
       params:
       - name: eval_batch_size
@@ -818,6 +819,21 @@ spec:
                 if result.returncode == 0:
                     print("Model evaluated successfully:")
                     print(result.stdout)
+                    def get_path_size(start_path):
+                        total_size = 0
+                        for path, dirs, files in os.walk(start_path):
+                            for f in files:
+                                fp = os.path.join(path, f)
+                                total_size += os.path.getsize(fp)
+                        return total_size
+
+                    size_base = get_path_size(MODEL_DIR)
+                    size_compress = get_path_size(COMPRESS_MODEL_DIR)
+                    compression_ratio = 100*(1 - size_compress/size_base)
+
+                    print(f"The base model size is: {size_base/1024/1024/1024} GB")
+                    print(f"The optimized model size is: {size_compress/1024/1024/1024} GB")
+                    print(f"The size reduction is: {compression_ratio}")
                 else:
                     print("Error evaluating the model:")
                     print(result.stderr)
@@ -852,7 +868,7 @@ spec:
             pipelines.kubeflow.org/cache_enabled: "true"
           annotations:
             pipelines.kubeflow.org/component_spec_digest: '{"name": "Gpu eval model",
-              "outputs": [], "version": "Gpu eval model@sha256=9cd29ed2ad643d546bded654ce2bf0bc6f1a5a5941ebf5b018875bb85cca254c"}'
+              "outputs": [], "version": "Gpu eval model@sha256=e933cd932ab732771a928b887928f3a691ac1b9e00c4a84fbf9116e270894fac"}'
       when:
       - input: $(tasks.condition-5.results.outcome)
         operator: in

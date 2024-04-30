@@ -76,7 +76,6 @@ Run the pipeline selecting the model and the options:
 - Evaluate or not
 - GPU (Quantized) or CPU (Sparsified: Quantized + Pruned). Note for GPU inferencing, it is not supported to both prune and quantized yet.
 
-
 ## DeepSparse
 
 Run the optimized model with DeepSparse
