@@ -37,7 +37,7 @@ Cluster storage named ``models-shared``, so that a volume to be shared is create
 
 Data connection, named ``models``, pointing to the S3 bucket to store the resulting model
 
-* NOTE: the cluster storage can have any name, as long as it is the same given later on the pipeline parameters. But the Data connection must be named ``models`` for now as it is hardcoded in the pipeline.
+* NOTE: the cluster storage and the data connection can have any name, as long as it is the same given later on the pipeline parameters.
 
 ### Create the images needed for the pipeline
 
@@ -59,12 +59,23 @@ podman push quay.io/USER/neural-magic:nm_vllm_eval
 podman push quay.io/USER/neural-magic:base_eval
 ```
 
+### Compile the pipeline
+
+This is the process to create the ```PipelineRun``` yaml file from the python script. It requires ```kfp_tekton``` version 1.5.9:
+
+```bash
+pip install kfp_tekton==1.5.9
+python pipeline_simplified.py
+```
+
+* NOTE: there is another option for a more complex/flexible pipeline at ```pipeline_nmvllm.py```, but the rest assumes the usage of the simplified one.
+
 ### Run the pipeline
 
 Run the pipeline selecting the model and the options:
 - Evaluate or not
-- Sparsify or not
-- Quantizied or not (note for GPU inferencing, it is not supported to both sparsify and quantized yet)
+- GPU (Quantized) or CPU (Sparsified: Quantized + Pruned). Note for GPU inferencing, it is not supported to both prune and quantized yet.
+
 
 ## DeepSparse
 
