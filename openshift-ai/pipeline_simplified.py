@@ -175,6 +175,7 @@ def gpu_eval_model(model_path: str, tasks: str, batch_size: str):
     if result.returncode == 0:
         print("Model evaluated successfully:")
         print(result.stdout)
+        BASE_DIR = "/mnt/models/"
         MODEL_DIR = BASE_DIR + "llm"
         COMPRESS_MODEL_DIR = BASE_DIR + "compress-llm"
         def get_path_size(start_path):
@@ -358,10 +359,12 @@ def cpu_model_optimization(predecing_task:object, sparsity_ratio:float,
     export_llm = export_op(model_path=COMPRESS_MODEL_DIR,
                            exported_model_path=EXPORTED_MODEL_DIR)
     export_llm.add_pvolumes({"/mnt/models": vol})
-    export_llm.add_resource_request('nvidia.com/gpu', "1")
-    export_llm.add_resource_limit('nvidia.com/gpu', "1")
+    #export_llm.add_node_selector_constraint(
+    #    label_name='nvidia.com/gpu.present', value='true')
+    #export_llm.add_toleration(gpu_toleration)
+    #export_llm.add_resource_request('nvidia.com/gpu', "1")
+    #export_llm.add_resource_limit('nvidia.com/gpu', "1")
     export_llm.add_resource_request('memory', "32Gi")
-    export_llm.add_resource_limit('memory', "32Gi")
     export_llm.after(sparse_llm)
 
     with dsl.Condition(eval == True):
