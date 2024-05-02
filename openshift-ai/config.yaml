@@ -4,3 +4,6 @@ endpoints:
     #model: hf:neuralmagic/TinyLlama-1.1B-Chat-v0.4-pruned50-quant-ds
     #model: /mnt/models/deployment
     model: /mnt/models-aux
+    # for beefy servers you can uncomment the next
+    # kwargs:
+    #   {"continuous_batch_sizes": [2,4,8]}
