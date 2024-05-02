@@ -291,8 +291,15 @@ def sparse_cpu_model(model_path:str, compress_model_path: str, ds: str,
             - LlamaRotaryEmbedding
             - LlamaRMSNorm
             - SiLUActivation
-            - MatMulOutput_QK
-            - MatMulOutput_PV
+            # - MatMulOutput_QK
+            # - MatMulOutput_PV
+            - QuantizableMatMul
+            # Skip quantizing the layers with the most sensitive activations
+            - model.layers.21.mlp.down_proj
+            - model.layers.20.mlp.down_proj
+            - model.layers.4.mlp.down_proj
+            - model.layers.31.mlp.down_proj
+            - model.layers.2.mlp.down_proj
           post_oneshot_calibration: true
           scheme_overrides:
             # Enable channelwise quantization for better accuracy
@@ -301,10 +308,10 @@ def sparse_cpu_model(model_path:str, compress_model_path: str, ds: str,
                 num_bits: 8
                 symmetric: true
                 strategy: channel
-            MatMulLeftInput_QK:
-              input_activations:
-                num_bits: 8
-                symmetric: true
+            # MatMulLeftInput_QK:
+            #   input_activations:
+            #     num_bits: 8
+            #     symmetric: true
             # For the embeddings, only weight-quantization makes sense
             Embedding:
               input_activations: null
@@ -332,7 +339,7 @@ def export_model(model_path: str, exported_model_path: str):
     export(
         model_path,
         task="text-generation",
-        sequence_length=1024,
+        sequence_length=2048,
         target_path=exported_model_path
     )
 
