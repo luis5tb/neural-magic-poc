@@ -286,8 +286,15 @@ spec:
                         - LlamaRotaryEmbedding
                         - LlamaRMSNorm
                         - SiLUActivation
-                        - MatMulOutput_QK
-                        - MatMulOutput_PV
+                        # - MatMulOutput_QK
+                        # - MatMulOutput_PV
+                        - QuantizableMatMul
+                        # Skip quantizing the layers with the most sensitive activations
+                        - model.layers.21.mlp.down_proj
+                        - model.layers.20.mlp.down_proj
+                        - model.layers.4.mlp.down_proj
+                        - model.layers.31.mlp.down_proj
+                        - model.layers.2.mlp.down_proj
                       post_oneshot_calibration: true
                       scheme_overrides:
                         # Enable channelwise quantization for better accuracy
@@ -296,10 +303,10 @@ spec:
                             num_bits: 8
                             symmetric: true
                             strategy: channel
-                        MatMulLeftInput_QK:
-                          input_activations:
-                            num_bits: 8
-                            symmetric: true
+                        # MatMulLeftInput_QK:
+                        #   input_activations:
+                        #     num_bits: 8
+                        #     symmetric: true
                         # For the embeddings, only weight-quantization makes sense
                         Embedding:
                           input_activations: null
@@ -352,7 +359,7 @@ spec:
             pipelines.kubeflow.org/cache_enabled: "true"
           annotations:
             pipelines.kubeflow.org/component_spec_digest: '{"name": "Sparse cpu model",
-              "outputs": [], "version": "Sparse cpu model@sha256=d47f9c61e6e19bce63b2f639f2362058a0dd728c3f04455bfc042e933e24cca2"}'
+              "outputs": [], "version": "Sparse cpu model@sha256=8bc3edc5bb24610f03b71e7db8584b461f36b7727cd93f559301a4315fbac845"}'
       when:
       - input: $(tasks.condition-1.results.outcome)
         operator: in
@@ -387,7 +394,7 @@ spec:
                 export(
                     model_path,
                     task="text-generation",
-                    sequence_length=1024,
+                    sequence_length=2048,
                     target_path=exported_model_path
                 )
 
@@ -401,7 +408,6 @@ spec:
           image: quay.io/ltomasbo/neural-magic:sparseml
           resources:
             requests:
-              nvidia.com/gpu: '1'
               memory: 32Gi
           volumeMounts:
           - mountPath: /mnt/models
@@ -417,7 +423,7 @@ spec:
             pipelines.kubeflow.org/cache_enabled: "true"
           annotations:
             pipelines.kubeflow.org/component_spec_digest: '{"name": "Export model",
-              "outputs": [], "version": "Export model@sha256=5357e3c10ff9ab32842b255b4b2df5196df8dce067d6b7a9a61e5799f4378fbc"}'
+              "outputs": [], "version": "Export model@sha256=286bce5414228e691518605aced6cfbae5ebe03ffa803fd309a953222250de69"}'
       when:
       - input: $(tasks.condition-1.results.outcome)
         operator: in
@@ -868,7 +874,7 @@ spec:
             pipelines.kubeflow.org/cache_enabled: "true"
           annotations:
             pipelines.kubeflow.org/component_spec_digest: '{"name": "Gpu eval model",
-              "outputs": [], "version": "Gpu eval model@sha256=6323d0c637da86e4025e09e71d18990cb1ca8116d0654f1d05c18318223747ef"}'
+              "outputs": [], "version": "Gpu eval model@sha256=b7aff49c8356bf3aebcb69ea5381814e613958ecf7dc070060ccc23d97dac4b5"}'
       when:
       - input: $(tasks.condition-5.results.outcome)
         operator: in
