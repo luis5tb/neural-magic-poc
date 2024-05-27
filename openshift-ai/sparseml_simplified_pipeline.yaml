@@ -408,7 +408,7 @@ spec:
           image: quay.io/ltomasbo/neural-magic:sparseml
           resources:
             requests:
-              memory: 32Gi
+              memory: 56Gi
           volumeMounts:
           - mountPath: /mnt/models
             name: models-shared
@@ -431,7 +431,7 @@ spec:
         - "true"
       runAfter:
       - sparse-cpu-model
-      timeout: 5h
+      timeout: 10h
     - name: cpu-eval-model
       params:
       - name: eval_batch_size
@@ -1417,6 +1417,12 @@ spec:
         operator: Exists
       nodeSelector:
         nvidia.com/gpu.present: "true"
+  - pipelineTaskName: export-model
+    taskPodTemplate:
+      tolerations:
+      - effect: NoSchedule
+        key: nvidia.com/gpu
+        operator: Exists
   - pipelineTaskName: quantize-gpu-model
     taskPodTemplate:
       tolerations:
