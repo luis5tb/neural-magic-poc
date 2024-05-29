@@ -63,7 +63,7 @@ podman push quay.io/USER/neural-magic:nm_vllm_eval
 podman push quay.io/USER/neural-magic:base_eval
 ```
 
-### Compile the pipeline
+### (OLD) Compile the pipeline (RHOAI < 2.9)
 
 This is the process to create the ```PipelineRun``` yaml file from the python script. It requires ```kfp_tekton``` version 1.5.9:
 
@@ -73,6 +73,22 @@ python pipeline_simplified.py
 ```
 
 * NOTE: there is another option for a more complex/flexible pipeline at ```pipeline_nmvllm.py```, but the rest assumes the usage of the simplified one.
+
+### (NEW) Complie the pipeline for V2 (RHOAI >= 2.9)
+
+This is the process to create the pipeline ``yaml`` file from the python script.
+It requires ```kfp.kubernetes```:
+
+```bash
+pip install kfp[kubernetes]
+python pipeline_v2_cpu.py
+python pipeline_v2_gpu.py
+```
+
+* NOTE: there are two different pipelines for V2, one for GPU and one for CPU.
+  It would be straightforward to merge them in one and have a pipeline parameter
+  to chose between them
+
 
 ### Run the pipeline
 
